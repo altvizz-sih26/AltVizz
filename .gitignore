@@ -4,5 +4,6 @@ PROJECT DOSSIER.docx
 *.hgt
 *.hgt.gz
 *.tif
+.env
 srtm_tiles/
 __pycache__/
