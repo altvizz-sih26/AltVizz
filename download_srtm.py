@@ -1,6 +1,5 @@
 import requests
 
-API_KEY = "591b9567be8d99163b3a1468c78435a2"
 
 # name: (lon_min, lat_min, lon_max, lat_max)
 tiles = {
