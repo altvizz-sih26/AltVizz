@@ -22,7 +22,7 @@ import rasterio
 from rasterio.warp import transform_bounds, reproject, Resampling
 import numpy as np
 
-API_KEY = "591b9567be8d99163b3a1468c78435a2"          # your OpenTopography API key
+
 NODATA_VALUE = -9999.0             # sentinel for "no real SRTM data here"
 
 
