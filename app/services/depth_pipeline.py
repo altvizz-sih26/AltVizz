@@ -1,6 +1,6 @@
 """
 Real height-estimation pipeline: Depth Anything V2 -> terrain classification
--> elevation calibration.
+-> elevation calibration -> 3D mesh generation.
 
 Replaces the fake random output in ml_stub.py. Wires together three
 previously-separate pieces of the project:
@@ -11,7 +11,11 @@ previously-separate pieces of the project:
   3. person2_elevation/           (Person 2) - depth -> real-world elevation
                                     calibration, optionally against SRTM
 
-None of these three live in a proper installable package today, so this
+...plus a real 3D mesh generation step (mesh_generator.py) that replaces
+the 3 fixed pre-made demo GLBs with one generated from this specific
+upload's actual elevation data and source image.
+
+None of the first three live in a proper installable package today, so this
 module adds their folders to sys.path once at import time and then imports
 them normally. If the project structure changes, only SIH_ROOT below needs
 updating.
@@ -40,6 +44,8 @@ for subfolder in ("", "person2_elevation", "terrain_classifier"):
 from depth_anything_v2.dpt import DepthAnythingV2          # noqa: E402  (Person 1)
 from terrain_classifier import classify_terrain             # noqa: E402
 from elevation_pipeline import generate_elevation            # noqa: E402  (Person 2)
+
+from app.services.mesh_generator import generate_glb
 
 # --- model config (mirrors terrain_classifier/run.py) -----------------------
 MODEL_CONFIGS = {
@@ -93,12 +99,14 @@ def run_pipeline(image_path: str, srtm_path: str | None = None) -> dict:
          (terrain-aware if srtm_path given, else "relative" mode - a
          plausible but uncalibrated height scale, per elevation_pipeline.py)
       5. Save a height-map visualization PNG
+      6. Generate a real 3D mesh (.glb) from the elevation grid, textured
+         with the original image
 
     Returns a dict shaped for the `Result` DB model:
         height_map_path, flythrough_path, min/max/mean_height_m
 
-    `flythrough_path` is always None for now - 3D mesh/flythrough
-    generation from the elevation grid isn't built yet (see README).
+    `flythrough_path` now points at a real generated .glb mesh - NOT one
+    of the 3 pre-made static demo files. See mesh_generator.py.
     """
     raw_image = cv2.imread(image_path)
     if raw_image is None:
@@ -125,9 +133,14 @@ def run_pipeline(image_path: str, srtm_path: str | None = None) -> dict:
     height_map_full_path = os.path.join(RESULTS_DIR, height_map_filename)
     _save_height_map_png(elevation, height_map_full_path)
 
+    # 5. Generate a real 3D mesh from this specific upload's elevation + image
+    glb_filename = f"{base_name}_terrain.glb"
+    glb_full_path = os.path.join(RESULTS_DIR, glb_filename)
+    generate_glb(elevation, raw_image, glb_full_path)
+
     return {
         "height_map_path": f"/static/results/{height_map_filename}",
-        "flythrough_path": None,  # not yet built - see README "Next steps"
+        "flythrough_path": f"/static/results/{glb_filename}",
         "min_height_m": float(np.nanmin(elevation)),
         "max_height_m": float(np.nanmax(elevation)),
         "mean_height_m": float(np.nanmean(elevation)),

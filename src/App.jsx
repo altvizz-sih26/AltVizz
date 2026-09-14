@@ -164,7 +164,7 @@ function Results() {
           <dt>Reconstruction</dt><dd className="success">{data?.status || 'Complete'}</dd>
           <dt>Calibration</dt><dd>{data?.calibrationMode || 'relative (uncalibrated)'}</dd>
         </dl>
-        <a className="button primary full" href="/viewer.html" target="_blank" rel="noopener noreferrer">View 3D Model <Arrow /></a>
+        <a className="button primary full" href={`/viewer.html?glb=${encodeURIComponent(data?.glbUrl || '')}`} target="_blank" rel="noopener noreferrer">View 3D Model <Arrow /></a>
       </article>
     </div>
     <button className="text-button back" onClick={fresh}>← Upload New Image</button>

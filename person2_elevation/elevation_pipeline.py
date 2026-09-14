@@ -1,5 +1,6 @@
 import numpy as np
 import rasterio
+from scipy.ndimage import median_filter
 
 CLASS_NAMES = {
     0: "urban",
@@ -42,6 +43,27 @@ def detect_edge_artifacts(elevation, border=5):
             elif name == "left": artifact_mask[:, :border] |= (region == 0.0)
             elif name == "right": artifact_mask[:, -border:] |= (region == 0.0)
     return artifact_mask
+
+
+def remove_elevation_spikes(elevation, window_size=5, threshold=15):
+    """
+    Detects isolated pixels that are far higher/lower than their local
+    neighborhood (single-pixel noise spikes, common on low-texture terrain
+    where depth models produce unreliable outliers) and replaces them with
+    the local median instead. Real terrain features (supported by many
+    neighboring pixels agreeing) are left untouched.
+    """
+    local_median = median_filter(elevation, size=window_size)
+    deviation = np.abs(elevation - local_median)
+
+    spike_mask = deviation > threshold
+    n_spikes = int(spike_mask.sum())
+    if n_spikes > 0:
+        print(f"Spikes detected and smoothed: {n_spikes} pixels ({100*n_spikes/elevation.size:.2f}%)")
+
+    cleaned = elevation.copy()
+    cleaned[spike_mask] = local_median[spike_mask]
+    return cleaned, n_spikes
 
 
 def _resample_to_match(reference_elevation, void_mask, target_shape):
@@ -89,19 +111,23 @@ def terrain_aware_calibration(depth, reference_elevation, void_mask, terrain_mas
     return calibrated, fit_report
 
 
-def generate_elevation(depth, srtm_path=None, terrain_mask=None):
+def generate_elevation(depth, srtm_path=None, terrain_mask=None, despike=True, spike_threshold=15):
     """
     Main entry point. Takes already-loaded depth array, an optional path
     to SRTM ground truth, and an optional already-loaded terrain mask.
     Automatically picks relative / global / terrain-aware calibration.
     Automatically excludes detected edge artifacts from error reporting.
+    Automatically removes isolated elevation spikes (despike=True by default).
     """
     metadata = {"error_mean": None, "error_max": None, "correlation": None,
-                "fit_report": None, "mode": None, "artifact_pixels": 0}
+                "fit_report": None, "mode": None, "artifact_pixels": 0, "spike_pixels": 0}
 
     if srtm_path is None:
         metadata["mode"] = "relative"
         elevation = relative_elevation(depth)
+        if despike:
+            elevation, n_spikes = remove_elevation_spikes(elevation, threshold=spike_threshold)
+            metadata["spike_pixels"] = n_spikes
         return elevation, metadata
 
     reference_elevation, void_mask = load_elevation_any(srtm_path)
@@ -122,6 +148,10 @@ def generate_elevation(depth, srtm_path=None, terrain_mask=None):
     else:
         metadata["mode"] = "global"
         elevation, fit_report = global_calibration(depth, reference_elevation, exclude_mask)
+
+    if despike:
+        elevation, n_spikes = remove_elevation_spikes(elevation, threshold=spike_threshold)
+        metadata["spike_pixels"] = n_spikes
 
     valid = ~exclude_mask
     error = np.abs(elevation[valid] - reference_elevation[valid])
