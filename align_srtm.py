@@ -8,6 +8,8 @@ pairs = {
     "bare_terrain": ("test_data/bare_terrain/bare_terrain_1.tif", "test_data/bare_terrain/srtm_bare_terrain.tif"),
 }
 
+NODATA_VALUE = -9999.0  # sentinel for "no real data here" instead of 0.0
+
 for name, (img_path, srtm_path) in pairs.items():
     print(f"\nAligning {name}...")
     with rasterio.open(img_path) as ref:
@@ -21,7 +23,8 @@ for name, (img_path, srtm_path) in pairs.items():
         src_transform = src.transform
         src_crs = src.crs
 
-        dst_data = np.empty((ref_height, ref_width), dtype=np.float32)
+        # fill destination with NODATA first, so untouched edge pixels stay NODATA
+        dst_data = np.full((ref_height, ref_width), NODATA_VALUE, dtype=np.float32)
 
         reproject(
             source=src_data,
@@ -30,6 +33,7 @@ for name, (img_path, srtm_path) in pairs.items():
             src_crs=src_crs,
             dst_transform=ref_transform,
             dst_crs=ref_crs,
+            dst_nodata=NODATA_VALUE,
             resampling=Resampling.bilinear,
         )
 
@@ -41,11 +45,13 @@ for name, (img_path, srtm_path) in pairs.items():
             "dtype": "float32",
             "crs": ref_crs,
             "transform": ref_transform,
+            "nodata": NODATA_VALUE,
         }
 
         out_path = f"test_data/{name}/srtm_{name}_aligned.tif"
         with rasterio.open(out_path, "w", **out_meta) as dst:
             dst.write(dst_data, 1)
 
+        valid = dst_data[dst_data != NODATA_VALUE]
         print(f"Saved: {out_path}")
-        print(f"Shape: {dst_data.shape}, Min: {dst_data.min():.1f}m, Max: {dst_data.max():.1f}m")
+        print(f"Shape: {dst_data.shape}, Valid pixels: {valid.size}/{dst_data.size}")
