@@ -671,12 +671,29 @@ h2{
     )
 }
 
+/* When a real DSM image is rendered inside .terrain-art (dsmUrl present),
+   the decorative ring pattern and gold-tint sweep were painting on top of
+   the actual generated height map, making it look distorted/foggy. Those
+   two layers only belong on the placeholder gradient background used
+   when there's no real image yet, so switch them off whenever an <img>
+   is present. */
+.terrain-art:has(img):before,
+.terrain-art:has(img):after{
+  content:none
+}
+
 .terrain-art span,
 .terrain-art small{
   position:absolute;
   z-index:2;
-  font:10px 'DM Mono';
-  color:white
+  font:700 14px 'DM Mono';
+  letter-spacing:.03em;
+  color:#fff;
+  background:rgba(4,10,20,.72);
+  border:1px solid rgba(255,255,255,.18);
+  padding:5px 10px;
+  border-radius:5px;
+  text-shadow:0 1px 3px rgba(0,0,0,.55)
 }
 
 .terrain-art span{
@@ -686,7 +703,8 @@ h2{
 
 .terrain-art small{
   left:13px;
-  bottom:12px
+  bottom:12px;
+  font-size:14px /* small tag defaults smaller; force it to match span */
 }
 
 .card-copy{

@@ -42,26 +42,61 @@ import "./style.css";
 // to change.
 // ===============================================================
 
-const MODEL_CONFIG = [
-  {
-    key: "bare",
-    label: "Bare Terrain",
-    url: "/depthwizard_bare_terrain_3d.glb",
-    buttonId: "btn-bare",
-  },
-  {
-    key: "terrain",
-    label: "Terrain",
-    url: "/depthwizard_urban_3d.glb",
-    buttonId: "btn-terrain",
-  },
-  {
-    key: "vegetation",
-    label: "Vegetation",
-    url: "/urban_depthwizard_3d.glb",
-    buttonId: "btn-vegetation",
-  },
-];
+const params = new URLSearchParams(window.location.search);
+const dynamicGlbUrl = params.get("glb");
+const dynamicLabel = params.get("label") || "Generated Terrain";
+
+const MODEL_CONFIG = dynamicGlbUrl
+  ? [
+      { key: "dynamic", label: dynamicLabel, url: dynamicGlbUrl, buttonId: "btn-bare" },
+    ]
+  : [
+      { key: "bare", label: "Bare Terrain", url: "/depthwizard_bare_terrain_3d.glb", buttonId: "btn-bare" },
+      { key: "terrain", label: "Terrain", url: "/depthwizard_urban_3d.glb", buttonId: "btn-terrain" },
+      { key: "vegetation", label: "Vegetation", url: "/urban_depthwizard_3d.glb", buttonId: "btn-vegetation" },
+    ];
+
+// ===============================================================
+// DYNAMIC MODE UI ADJUSTMENTS
+// ===============================================================
+// When a real backend result is loaded via ?glb=&label=, the page only
+// ever shows ONE model — so the static 3-layer HTML (button text,
+// loading copy, "Layers" group label) needs to reflect that instead of
+// leftover demo copy ("Bare Terrain", "Reading bare terrain, terrain
+// and vegetation meshes", etc.), which would otherwise be misleading
+// for a user looking at their own reconstruction.
+if (dynamicGlbUrl) {
+  // Remove the two demo-only layer buttons; #btn-bare is repurposed
+  // below as the single "current model" button instead of removing it.
+  document.getElementById("btn-terrain")?.remove();
+  document.getElementById("btn-vegetation")?.remove();
+
+  // Relabel the remaining layer button with the real model's label
+  // instead of leaving the hardcoded "Bare Terrain" text in place.
+  const dynamicBtn = document.getElementById("btn-bare");
+  if (dynamicBtn) {
+    const textEl = dynamicBtn.querySelector(".ctrl-text");
+    if (textEl) textEl.textContent = dynamicLabel;
+
+    const iconEl = dynamicBtn.querySelector(".ctrl-icon");
+    if (iconEl) iconEl.textContent = "📍";
+  }
+
+  // "Layers" no longer makes sense when there's only one model to show.
+  const layersGroup = document.querySelector('.control-group[aria-label="Model layers"]');
+  if (layersGroup) {
+    const groupLabel = layersGroup.querySelector(".control-group-label");
+    if (groupLabel) groupLabel.textContent = "Model";
+  }
+
+  // Loading overlay copy assumed the 3 static demo files; rewrite it to
+  // describe loading a single generated result instead.
+  const loadingTitleEl = document.querySelector(".loading-title");
+  if (loadingTitleEl) loadingTitleEl.textContent = "Preparing your reconstruction";
+
+  const loadingNoteEl = document.querySelector(".loading-note");
+  if (loadingNoteEl) loadingNoteEl.textContent = `Loading ${dynamicLabel}`;
+}
 
 // Every one of these GLBs was authored Z-up. If a future model
 // export is already Y-up, set its `upAxis` to "y" instead and it
@@ -120,6 +155,34 @@ renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 (canvasContainer || document.body).appendChild(renderer.domElement);
 
 // ===============================================================
+// CONTROLS
+// ===============================================================
+
+const controls = new OrbitControls(camera, renderer.domElement);
+
+controls.enableDamping = true;
+controls.dampingFactor = 0.06;
+controls.screenSpacePanning = true; // Google Maps jaisa flat pan
+
+controls.mouseButtons = {
+  LEFT: THREE.MOUSE.PAN,     // left-drag = pan (left/right/up/down)
+  MIDDLE: THREE.MOUSE.DOLLY, // scroll = zoom
+  RIGHT: THREE.MOUSE.ROTATE, // right-drag = rotate/tilt
+};
+
+controls.touches = {
+  ONE: THREE.TOUCH.PAN,
+  TWO: THREE.TOUCH.DOLLY_ROTATE, // 2-finger = zoom+rotate (mobile)
+};
+
+controls.panSpeed = 1.2;
+controls.rotateSpeed = 0.8;
+
+controls.minDistance = 5;
+controls.maxDistance = 5000;
+controls.maxPolarAngle = Math.PI * 0.495; // stop just short of going underground
+
+// ===============================================================
 // LIGHTS
 // ===============================================================
 // Four-light "studio" rig instead of a single strong key light:
@@ -176,26 +239,6 @@ fillLight.position.set(-450, 500, -380);
 fillLight.castShadow = false;
 scene.add(fillLight);
 scene.add(fillLight.target);
-
-// ===============================================================
-// GROUND-PLANE FOR SHADOWS
-// (helps depth perception; disabled once a model is centered on
-// it since the terrain itself IS the ground)
-// ===============================================================
-
-// ===============================================================
-// CONTROLS
-// ===============================================================
-
-const controls = new OrbitControls(camera, renderer.domElement);
-
-controls.enableDamping = true;
-controls.dampingFactor = 0.06;
-controls.screenSpacePanning = false;
-
-controls.minDistance = 5;
-controls.maxDistance = 5000;
-controls.maxPolarAngle = Math.PI * 0.495; // stop just short of going underground
 
 // ===============================================================
 // GLTF LOADER

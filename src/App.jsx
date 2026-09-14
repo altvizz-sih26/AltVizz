@@ -164,11 +164,18 @@ function Results() {
           <dt>Reconstruction</dt><dd className="success">{data?.status || 'Complete'}</dd>
           <dt>Calibration</dt><dd>{data?.calibrationMode || 'relative (uncalibrated)'}</dd>
         </dl>
-        <a className="button primary full" href="/viewer.html" target="_blank" rel="noopener noreferrer">View 3D Model <Arrow /></a>
+        
+  <a className="button primary full"
+  href={data?.glbUrl ? `/viewer.html?glb=${encodeURIComponent(data.glbUrl)}&label=${encodeURIComponent(data.glbName || 'Terrain mesh')}` : '/viewer.html'}
+  target="_blank"
+  rel="noopener noreferrer"
+>
+  View 3D Model <Arrow />
+</a>
       </article>
     </div>
     <button className="text-button back" onClick={fresh}>← Upload New Image</button>
-  </section>{modal && <div className="modal-backdrop" onMouseDown={() => setModal('')}><div className="modal" onMouseDown={e => e.stopPropagation()}><button className="close" onClick={() => setModal('')}>×</button>{modal === 'dsm' ? <><TerrainArt dsmUrl={data?.dsmUrl} minHeightM={data?.minHeightM} maxHeightM={data?.maxHeightM} /><h2>Digital Surface Model</h2><p>{isUncalibrated ? 'Uncalibrated estimate — no reference elevation data was used.' : `Calibrated against real elevation data (${data?.calibrationMode} mode).`}</p></> : <><div className="model-preview big">GLB</div><h2>GLB Terrain Output</h2><p>This GLB is ready for download or exploration in the interactive viewer.</p><div className="actions"><button className="button secondary" onClick={downloadResult}>Download GLB</button><button className="button primary" onClick={() => nav('/viewer')}>Open Viewer</button></div></>}</div></div>}</Layout>;
+  </section>{modal && <div className="modal-backdrop" onMouseDown={() => setModal('')}><div className="modal" onMouseDown={e => e.stopPropagation()}><button className="close" onClick={() => setModal('')}>×</button>{modal === 'dsm' ? <><TerrainArt dsmUrl={data?.dsmUrl} minHeightM={data?.minHeightM} maxHeightM={data?.maxHeightM} /><h2>Digital Surface Model</h2><p>{isUncalibrated ? 'Uncalibrated estimate — no reference elevation data was used.' : `Calibrated against real elevation data (${data?.calibrationMode} mode).`}</p></> : <><div className="model-preview big">GLB</div><h2>GLB Terrain Output</h2><p>{data?.glbUrl ? 'This GLB is ready for download or exploration in the interactive viewer.' : 'Real mesh generation isn\u2019t built server-side yet — showing a demo terrain mesh instead.'}</p><div className="actions"><button className="button primary" onClick={downloadResult}>Download GLB</button></div></>}</div></div>}</Layout>;
 }
 
 function ViewerCanvas({ top, reset, fly }) {

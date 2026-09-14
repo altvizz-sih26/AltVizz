@@ -131,14 +131,20 @@ export const getResults = async () => {
 export const clearDemoJob = () => sessionStorage.removeItem(STATE_KEY);
 
 /**
- * Downloads the real generated height map if available, otherwise falls
- * back to the placeholder demo GLB. Once server-side flythrough generation
- * exists, point this at that real file instead.
+ * Downloads the real generated GLB mesh if available, otherwise falls
+ * back to the placeholder demo GLB.
+ *
+ * FIXED: this used to check `results.dsmUrl` first, so clicking
+ * "Download GLB" almost always downloaded the DSM height-map PNG instead
+ * of an actual .glb file (dsmUrl is present whenever the backend has run,
+ * while glbUrl was only ever the demo fallback). This function is only
+ * ever wired to "Download GLB" buttons, so it should always prefer the
+ * GLB output over the DSM image.
  */
 export const downloadResult = async () => {
   const results = await getResults();
-  const url = results.dsmUrl || results.glbUrl;
-  const filename = results.dsmUrl ? results.dsmName : results.glbName;
+  const url = results.glbUrl || results.dsmUrl;
+  const filename = results.glbUrl ? results.glbName : results.dsmName;
 
   const link = document.createElement('a');
   link.href = url;
