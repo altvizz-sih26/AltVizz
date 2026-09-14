@@ -10,3 +10,7 @@ opencv-python
 numpy
 rasterio
 scipy
+
+trimesh
+tifffile
+Pillow

@@ -2,7 +2,7 @@
 Real height-estimation pipeline: Depth Anything V2 -> terrain classification
 -> elevation calibration.
 
-Replaces the fake random output in ml_stub.py. Wires together three
+Replaces the fake random output in ml_stub.py. Wires together four
 previously-separate pieces of the project:
 
   1. depth_anything_v2/           (Person 1) - monocular depth estimation
@@ -10,8 +10,11 @@ previously-separate pieces of the project:
                                     no checkpoint needed)
   3. person2_elevation/           (Person 2) - depth -> real-world elevation
                                     calibration, optionally against SRTM
+  4. process_new_image.py         (Person 5) - auto-fetches + aligns SRTM
+                                    reference elevation for ANY georeferenced
+                                    upload, no hardcoded region needed
 
-None of these three live in a proper installable package today, so this
+None of these three (four) live in a proper installable package today, so this
 module adds their folders to sys.path once at import time and then imports
 them normally. If the project structure changes, only SIH_ROOT below needs
 updating.
@@ -30,9 +33,9 @@ import cv2
 import numpy as np
 import torch
 
-# --- make the three sibling folders importable -----------------------------
+# --- make the sibling folders importable -----------------------------
 SIH_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-for subfolder in ("", "person2_elevation", "terrain_classifier"):
+for subfolder in ("", "person2_elevation", "terrain_classifier", "person3_3d_reconstruction"):
     path = os.path.join(SIH_ROOT, subfolder) if subfolder else SIH_ROOT
     if path not in sys.path:
         sys.path.insert(0, path)
@@ -40,6 +43,8 @@ for subfolder in ("", "person2_elevation", "terrain_classifier"):
 from depth_anything_v2.dpt import DepthAnythingV2          # noqa: E402  (Person 1)
 from terrain_classifier import classify_terrain             # noqa: E402
 from elevation_pipeline import generate_elevation            # noqa: E402  (Person 2)
+from process_new_image import process_new_image             # noqa: E402  (Person 5)
+from create_terrain import generate_glb                      # noqa: E402  (Person 3)
 
 # --- model config (mirrors terrain_classifier/run.py) -----------------------
 MODEL_CONFIGS = {
@@ -83,26 +88,74 @@ def _get_model() -> DepthAnythingV2:
     return _model
 
 
+def _auto_fetch_srtm(image_path: str) -> str | None:
+    """
+    NEW: Tries to automatically get a matching SRTM reference for this upload
+    using Person 5's generic process_new_image.py, instead of requiring the
+    caller to pass srtm_path manually.
+
+    Returns the aligned SRTM path on success, or None if it can't be fetched
+    (e.g. the image has no georeferencing, or the SRTM download fails/network
+    is unavailable) - falling back to relative/uncalibrated mode, same as
+    before, rather than crashing the whole pipeline.
+    """
+    try:
+        return process_new_image(image_path)
+    except Exception as e:
+        print(f"[depth_pipeline] SRTM auto-fetch skipped for {image_path}: {e}")
+        return None
+
+
+def _try_generate_glb(elevation: np.ndarray, image_path: str, base_name: str) -> str | None:
+    """
+    NEW: Builds the textured 3D mesh (Person 3's create_terrain.py, now a
+    reusable function) from the elevation this pipeline just computed.
+
+    Returns the GLB's public path on success, or None if mesh generation
+    fails for any reason (e.g. bad image format) - the rest of the result
+    (heightmap, DSM stats) still gets returned either way, same pattern as
+    the SRTM auto-fetch fallback above.
+    """
+    try:
+        glb_filename = f"{base_name}_terrain.glb"
+        glb_full_path = os.path.join(RESULTS_DIR, glb_filename)
+        generate_glb(elevation, image_path, glb_full_path)
+        return f"/static/results/{glb_filename}"
+    except Exception as e:
+        print(f"[depth_pipeline] GLB mesh generation failed for {image_path}: {e}")
+        return None
+
+
 def run_pipeline(image_path: str, srtm_path: str | None = None) -> dict:
     """
     Runs the full pipeline on one uploaded image:
       1. Load image
       2. Depth Anything V2 -> relative depth map, normalized 0-1
       3. OpenCV terrain classifier -> per-pixel terrain class mask
-      4. Elevation calibration -> real-world-scale elevation
-         (terrain-aware if srtm_path given, else "relative" mode - a
+      4. If srtm_path wasn't explicitly provided, try to auto-fetch it for
+         this specific image (NEW - works for any georeferenced upload,
+         not just the 3 known test regions)
+      5. Elevation calibration -> real-world-scale elevation
+         (terrain-aware if srtm_path given/found, else "relative" mode - a
          plausible but uncalibrated height scale, per elevation_pipeline.py)
-      5. Save a height-map visualization PNG
+      6. Save a height-map visualization PNG
+      7. Build a textured 3D mesh (.glb) from the elevation + source image
+         (NEW - Person 3's create_terrain.py, now wired in directly)
 
     Returns a dict shaped for the `Result` DB model:
         height_map_path, flythrough_path, min/max/mean_height_m
 
-    `flythrough_path` is always None for now - 3D mesh/flythrough
-    generation from the elevation grid isn't built yet (see README).
+    `flythrough_path` is now the real GLB path when mesh generation
+    succeeds, or None if it fails for any reason (pipeline still returns
+    the rest of the result rather than crashing - see _try_generate_glb).
     """
     raw_image = cv2.imread(image_path)
     if raw_image is None:
         raise ValueError(f"Could not read image at {image_path} (unsupported or corrupt file)")
+
+    # NEW: auto-fetch SRTM if the caller didn't already supply one
+    if srtm_path is None:
+        srtm_path = _auto_fetch_srtm(image_path)
 
     model = _get_model()
 
@@ -125,9 +178,12 @@ def run_pipeline(image_path: str, srtm_path: str | None = None) -> dict:
     height_map_full_path = os.path.join(RESULTS_DIR, height_map_filename)
     _save_height_map_png(elevation, height_map_full_path)
 
+    # 5. NEW: build the textured 3D mesh from this same elevation array
+    flythrough_path = _try_generate_glb(elevation, image_path, base_name)
+
     return {
         "height_map_path": f"/static/results/{height_map_filename}",
-        "flythrough_path": None,  # not yet built - see README "Next steps"
+        "flythrough_path": flythrough_path,  # NEW - real GLB path, or None if generation failed
         "min_height_m": float(np.nanmin(elevation)),
         "max_height_m": float(np.nanmax(elevation)),
         "mean_height_m": float(np.nanmean(elevation)),
