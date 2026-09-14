@@ -3,87 +3,16 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>SASA MINE — 3D Terrain Reconstruction</title>
-    <link
-      rel="preconnect"
-      href="https://fonts.googleapis.com"
-    />
-    <link
-      rel="preconnect"
-      href="https://fonts.gstatic.com"
-      crossorigin
-    />
+    <title>DepthWizard — Satellite Terrain Intelligence</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
       href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
       rel="stylesheet"
     />
   </head>
   <body>
-    <div id="viewer"></div>
-
-    <!-- Top bar -->
-    <header class="topbar">
-      <div class="topbar-title">
-        <span class="topbar-mark">SASA MINE</span>
-        <span class="topbar-subtitle">3D Terrain Reconstruction</span>
-      </div>
-      <div class="topbar-status">
-        <span class="status-dot"></span>
-        <span id="status-text">Loading models...</span>
-      </div>
-    </header>
-
-    <!-- Loading overlay -->
-    <div id="loading-overlay" class="loading-overlay">
-      <div class="loading-panel">
-        <div class="loading-title">Preparing site data</div>
-        <div class="loading-progress">0 / 3</div>
-        <div class="loading-bar">
-          <div class="loading-bar-fill"></div>
-        </div>
-        <div class="loading-note">
-          Reading bare terrain, terrain and vegetation meshes
-        </div>
-      </div>
-    </div>
-
-    <!-- Bottom control cluster -->
-    <div class="controls">
-      <div class="control-group" role="group" aria-label="Model layers">
-        <span class="control-group-label">Layers</span>
-        <button id="btn-vegetation" class="ctrl-btn" disabled>
-          <span class="ctrl-icon">🌿</span>
-          <span class="ctrl-text">Vegetation</span>
-        </button>
-        <button id="btn-terrain" class="ctrl-btn" disabled>
-          <span class="ctrl-icon">🏔️</span>
-          <span class="ctrl-text">Terrain</span>
-        </button>
-        <button id="btn-bare" class="ctrl-btn" disabled>
-          <span class="ctrl-icon">⛰️</span>
-          <span class="ctrl-text">Bare Terrain</span>
-        </button>
-      </div>
-
-      <div class="control-divider"></div>
-
-      <div class="control-group" role="group" aria-label="Camera">
-        <span class="control-group-label">Camera</span>
-        <button id="btn-flythrough-start" class="ctrl-btn">
-          <span class="ctrl-icon">▶</span>
-          <span class="ctrl-text">Start Flythrough</span>
-        </button>
-        <button id="btn-flythrough-stop" class="ctrl-btn is-active">
-          <span class="ctrl-icon">✋</span>
-          <span class="ctrl-text">Manual Navigation</span>
-        </button>
-        <button id="btn-camera-reset" class="ctrl-btn">
-          <span class="ctrl-icon">↻</span>
-          <span class="ctrl-text">Reset Camera</span>
-        </button>
-      </div>
-    </div>
-
-    <script type="module" src="/src/main.js"></script>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

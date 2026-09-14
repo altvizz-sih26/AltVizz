@@ -1,20 +1,147 @@
 import { DEMO_CONFIG } from '../config/demoConfig';
 
+// Backend base URL. Change this if your API runs somewhere else
+// (e.g. a deployed URL later).
+const API_BASE = 'http://127.0.0.1:8000';
+
 const STATE_KEY = 'depthwizard-demo-job';
+
 export const getJob = () => JSON.parse(sessionStorage.getItem(STATE_KEY) || 'null');
-export const uploadImage = async (file) => {
-  const job = { fileName: file.name, fileType: file.type || `image/${file.name.split('.').pop()}`, fileSize: file.size, previewUrl: file.type.startsWith('image/') && !/tiff/i.test(file.name) ? URL.createObjectURL(file) : null, demoMode: true, createdAt: Date.now() };
-  sessionStorage.setItem(STATE_KEY, JSON.stringify(job)); return job;
+
+function saveJob(job) {
+  sessionStorage.setItem(STATE_KEY, JSON.stringify(job));
+  return job;
+}
+
+/**
+ * Uploads an image (and optionally a matching SRTM elevation file) to the
+ * real backend. Kicks off a background processing job on the server side.
+ *
+ * `srtmFile` is optional - without it, height results come back uncalibrated
+ * ("relative" mode, an arbitrary 0-50m scale, NOT real elevation). Pass a
+ * real SRTM GeoTIFF for the same location to get calibrated results.
+ */
+export const uploadImage = async (file, srtmFile = null) => {
+  const formData = new FormData();
+  formData.append('file', file);
+  if (srtmFile) {
+    formData.append('srtm_file', srtmFile);
+  }
+
+  const response = await fetch(`${API_BASE}/api/upload`, {
+    method: 'POST',
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.detail || `Upload failed (${response.status})`);
+  }
+
+  const data = await response.json();
+
+  const job = {
+    backendJobId: data.id,
+    fileName: file.name,
+    fileType: file.type || `image/${file.name.split('.').pop()}`,
+    fileSize: file.size,
+    previewUrl: file.type.startsWith('image/') && !/tiff/i.test(file.name)
+      ? URL.createObjectURL(file)
+      : null,
+    demoMode: false,
+    status: data.status, // "pending"
+    createdAt: Date.now(),
+  };
+
+  return saveJob(job);
 };
-export const startProcessing = async () => { const job = getJob(); if (!job) throw new Error('Select an image first.'); return job; };
-export const getResults = async () => ({ ...(getJob() || { fileName: DEMO_CONFIG.defaultFileName, fileType: 'image/tiff' }), dsmName: DEMO_CONFIG.demoDsmName, glbName: DEMO_CONFIG.demoGlbName, status: 'Complete' });
+
+/**
+ * Polls the backend until the job finishes (completed or failed).
+ * Throws if the job fails, so callers can show an error state.
+ */
+export const startProcessing = async () => {
+  const job = getJob();
+  if (!job || !job.backendJobId) throw new Error('Select an image first.');
+
+  const maxAttempts = 60;   // ~2 minutes at 2s intervals - CPU inference can be slow
+  const intervalMs = 2000;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const response = await fetch(`${API_BASE}/api/jobs/${job.backendJobId}`);
+    if (!response.ok) throw new Error(`Failed to check job status (${response.status})`);
+
+    const data = await response.json();
+
+    if (data.status === 'completed') {
+      return saveJob({ ...job, status: 'completed', result: data.result });
+    }
+    if (data.status === 'failed') {
+      saveJob({ ...job, status: 'failed', errorMessage: data.error_message });
+      throw new Error(data.error_message || 'Processing failed.');
+    }
+
+    // still pending/processing - wait and poll again
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+
+  throw new Error('Processing timed out. The job may still finish - check back later.');
+};
+
+/**
+ * Returns the final result in the shape the UI expects.
+ *
+ * IMPORTANT: `glbName` is NOT a real generated 3D flythrough yet - that
+ * step isn't built server-side. It falls back to one of the pre-made demo
+ * GLBs in /public so the viewer still has something to show. `dsmName`
+ * DOES point at a real generated height map from the backend.
+ */
+export const getResults = async () => {
+  const job = getJob();
+  if (!job) {
+    return { fileName: DEMO_CONFIG.defaultFileName, fileType: 'image/tiff', status: 'Complete' };
+  }
+
+  const result = job.result || {};
+
+  return {
+    fileName: job.fileName,
+    fileType: job.fileType,
+    status: job.status === 'completed' ? 'Complete' : job.status,
+
+    // Real backend output
+    dsmUrl: result.height_map_path ? `${API_BASE}${result.height_map_path}` : null,
+    dsmName: result.height_map_path ? result.height_map_path.split('/').pop() : DEMO_CONFIG.demoDsmName,
+    minHeightM: result.min_height_m ?? null,
+    maxHeightM: result.max_height_m ?? null,
+    meanHeightM: result.mean_height_m ?? null,
+
+    // Calibration quality - "relative" mode means these numbers are NOT
+    // real-world calibrated; only trust them in "global"/"terrain_aware" mode.
+    calibrationMode: result.calibration_mode ?? null,
+    errorMean: result.error_mean ?? null,
+    correlation: result.correlation ?? null,
+
+    // Flythrough isn't generated server-side yet - fall back to a static demo asset
+    glbUrl: result.flythrough_path ? `${API_BASE}${result.flythrough_path}` : DEMO_CONFIG.demoGlb,
+    glbName: result.flythrough_path ? result.flythrough_path.split('/').pop() : DEMO_CONFIG.demoGlbName,
+  };
+};
+
 export const clearDemoJob = () => sessionStorage.removeItem(STATE_KEY);
 
-// A valid, minimal glTF 2.0 binary containing one triangle. Replace this with a backend URL later.
-export const createDemoGlb = () => {
-  const json = JSON.stringify({asset:{version:'2.0',generator:'DepthWizard demo'},scene:0,scenes:[{nodes:[0]}],nodes:[{mesh:0}],meshes:[{primitives:[{attributes:{POSITION:0},indices:1}]}],buffers:[{byteLength:42}],bufferViews:[{buffer:0,byteOffset:0,byteLength:36,target:34962},{buffer:0,byteOffset:36,byteLength:6,target:34963}],accessors:[{bufferView:0,componentType:5126,count:3,type:'VEC3',min:[-1,-1,0],max:[1,1,0]},{bufferView:1,componentType:5123,count:3,type:'SCALAR'}]});
-  const enc = new TextEncoder(), jsonBytes = enc.encode(json), paddedJson = new Uint8Array(Math.ceil(jsonBytes.length / 4) * 4); paddedJson.set(jsonBytes); paddedJson.fill(32, jsonBytes.length);
-  const bin = new ArrayBuffer(44), dv = new DataView(bin); new Float32Array(bin,0,9).set([-1,-1,0, 1,-1,0, 0,1,0]); dv.setUint16(36,0,true);dv.setUint16(38,1,true);dv.setUint16(40,2,true);
-  const total = 12 + 8 + paddedJson.length + 8 + bin.byteLength, out = new ArrayBuffer(total), view = new DataView(out); view.setUint32(0,0x46546C67,true);view.setUint32(4,2,true);view.setUint32(8,total,true);view.setUint32(12,paddedJson.length,true);view.setUint32(16,0x4E4F534A,true);new Uint8Array(out,20,paddedJson.length).set(paddedJson);let o=20+paddedJson.length;view.setUint32(o,bin.byteLength,true);view.setUint32(o+4,0x004E4942,true);new Uint8Array(out,o+8).set(new Uint8Array(bin)); return new Blob([out],{type:'model/gltf-binary'});
+/**
+ * Downloads the real generated height map if available, otherwise falls
+ * back to the placeholder demo GLB. Once server-side flythrough generation
+ * exists, point this at that real file instead.
+ */
+export const downloadResult = async () => {
+  const results = await getResults();
+  const url = results.dsmUrl || results.glbUrl;
+  const filename = results.dsmUrl ? results.dsmName : results.glbName;
+
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  link.click();
 };
-export const downloadResult = () => { const link = document.createElement('a'); link.href = URL.createObjectURL(createDemoGlb()); link.download = DEMO_CONFIG.demoGlbName; link.click(); setTimeout(() => URL.revokeObjectURL(link.href), 2000); };
