@@ -1,8 +1,7 @@
 {
   "name": "image-2",
-  "version": "0.0.0",
-  "private": true,
   "version": "0.1.0",
+  "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -10,10 +9,10 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "vite": "latest",
     "react": "latest",
     "react-dom": "latest",
-    "react-router-dom": "latest"
-  },
-  "devDependencies": {}
+    "react-router-dom": "latest",
+    "three": "^0.186.0",
+    "vite": "latest"
+  }
 }

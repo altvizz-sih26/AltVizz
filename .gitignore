@@ -1,3 +1,13 @@
+PROJECT DOSSIER.docx
+*.docx
+*.npy
+*.hgt
+*.hgt.gz
+*.tif
+.env
+srtm_tiles/
+__pycache__/
+
 # Logs
 logs
 *.log
