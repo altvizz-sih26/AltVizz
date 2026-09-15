@@ -2,7 +2,7 @@ import { DEMO_CONFIG } from '../config/demoConfig';
 
 // Backend base URL. Change this if your API runs somewhere else
 // (e.g. a deployed URL later).
-const API_BASE = 'http://127.0.0.1:8000';
+const API_BASE = import.meta.env.VITE_API_BASE || 'http://127.0.0.1:8000';
 
 const STATE_KEY = 'depthwizard-demo-job';
 
