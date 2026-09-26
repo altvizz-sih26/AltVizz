@@ -36,3 +36,6 @@ dist-ssr
 app/results/
 app/uploads/
 depthwizard.db
+
+!xbd_demo_pairs/
+!xbd_demo_pairs/*.tif
