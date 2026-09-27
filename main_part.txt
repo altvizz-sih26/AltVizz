@@ -1,0 +1,1800 @@
+// ============================================================================
+// SASA MINE — 3D TERRAIN VIEWER
+// Person 4 — Three.js / GLB Viewer / Flythrough / Terrain Analysis
+// ============================================================================
+
+// import * as THREE from "three";
+// import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+// import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+// import "./style.css";
+import * as THREE from "three";
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { loadNPZ } from "./npz-loader.js";
+import viewerInputConfig from "./viewer-input-config.js";
+import "./style.css";
+
+
+// ============================================================================
+// HELPER
+// ============================================================================
+
+const $ = (id) => document.getElementById(id);
+
+
+// ============================================================================
+// CONFIGURATION
+// ============================================================================
+
+// Person 2 grid
+const GRID_ROWS = 1024;
+const GRID_COLS = 1024;
+
+// Person 3 currently downsamples:
+// 1024 x 1024 -> grid[::2, ::2] -> 512 x 512 mesh
+const DEFAULT_MESH_ROWS = 512;
+const DEFAULT_MESH_COLS = 512;
+const DEFAULT_GRID_STEP = 2;
+
+// Person 3 generated terrain is already Z-up.
+// X/Y are the ground plane and Z is elevation.
+// Do NOT rotate the GLB. The camera/controls are configured for Z-up.
+const SOURCE_UP_AXIS = "z";
+
+// Keep null until backend gives you a real endpoint.
+const BACKEND_ENDPOINT = null;
+
+const IMAGE_FIELD_NAME = "image";
+const RESPONSE_GLB_URL_FIELD = "glbUrl";
+
+const FLY_DURATION = 24;
+
+const LIGHT_BASE = {
+  ambient: 1.15,
+  hemisphere: 1.3,
+  sun: 2.4,
+};
+
+const LIGHT_HILLSHADE = {
+  ambient: 0.55,
+  hemisphere: 0.7,
+  sun: 3.4,
+};
+
+
+// ============================================================================
+// DOM — TOP BAR
+// ============================================================================
+
+const systemStatusIndicatorEl = $("system-status-indicator");
+const systemStatusValueEl = $("system-status-value");
+
+const telemetryModelValueEl = $("telemetry-model-value");
+const telemetryStatusValueEl = $("telemetry-status-value");
+
+const tabEls = Array.from(document.querySelectorAll(".tab"));
+
+
+// ============================================================================
+// DOM — LEFT SIDEBAR
+// ============================================================================
+
+const navItemEls = Array.from(document.querySelectorAll(".nav-item"));
+
+const statusIndicatorModelEl = $("status-indicator-model");
+const statusValueModelEl = $("status-value-model");
+
+const statusIndicatorGridEl = $("status-indicator-grid");
+const statusValueGridEl = $("status-value-grid");
+
+const statusIndicatorRenderEl = $("status-indicator-render");
+const statusValueRenderEl = $("status-value-render");
+
+const statusIndicatorCameraEl = $("status-indicator-camera");
+const statusValueCameraEl = $("status-value-camera");
+
+
+// ============================================================================
+// DOM — VIEWER
+// ============================================================================
+
+const viewerEl = $("viewer") || document.body;
+
+const viewportAzimuthEl = $("viewport-azimuth");
+const viewportPitchEl = $("viewport-pitch");
+const viewportCursorAltEl = $("viewport-cursor-alt");
+
+const viewportGeorefEl = $("viewport-georef");
+const viewportGridEl = $("viewport-grid");
+const viewportMeshEl = $("viewport-mesh");
+
+
+// ============================================================================
+// DOM — TOOLBAR
+// ============================================================================
+
+const btnAutoRotate = $("btn-auto-rotate");
+const btnToolbarWireframe = $("btn-toolbar-wireframe");
+const btnToolbarHillshade = $("btn-toolbar-hillshade");
+const btnToolbarSlopeHeatmap = $("btn-toolbar-slope-heatmap");
+
+
+// ============================================================================
+// DOM — CAMERA PRESETS
+// ============================================================================
+
+const btnCameraTop = $("btn-camera-top");
+const btnCameraIso = $("btn-camera-iso");
+const btnCameraProfile = $("btn-camera-profile");
+const btnCameraResetPreset = $("btn-camera-reset");
+
+
+// ============================================================================
+// DOM — FLYTHROUGH
+// ============================================================================
+
+const btnFlythroughStart = $("btn-flythrough-start");
+const btnFlythroughStop = $("btn-flythrough-stop");
+
+
+// ============================================================================
+// DOM — RIGHT SIDEBAR
+// ============================================================================
+
+const elevationPeakEl = $("elevation-peak");
+const elevationBaseEl = $("elevation-base");
+const elevationReliefEl = $("elevation-relief");
+
+const elevationChartEl = $("elevation-profile-chart");
+
+const metadataDatasetEl = $("metadata-dataset");
+const metadataElevationRangeEl = $("metadata-elevation-range");
+const metadataResolutionEl = $("metadata-resolution");
+const metadataGridEl = $("metadata-grid");
+const metadataMeshEl = $("metadata-mesh");
+
+
+// ============================================================================
+// DOM — LIGHTING
+// ============================================================================
+
+const solarAzimuthEl = $("solar-azimuth");
+const solarAzimuthValueEl = $("solar-azimuth-value");
+
+const solarElevationEl = $("solar-elevation");
+const solarElevationValueEl = $("solar-elevation-value");
+
+const zExaggerationEl = $("z-exaggeration");
+const zExaggerationValueEl = $("z-exaggeration-value");
+
+
+// ============================================================================
+// DOM — SHADING
+// ============================================================================
+
+const btnHillshade = $("btn-hillshade");
+const btnWireframe = $("btn-wireframe");
+const btnSlopeHeatmap = $("btn-slope-heatmap");
+const btnTerrainTexture = $("btn-terrain-texture");
+
+
+// ============================================================================
+// DOM — INSPECTION
+// ============================================================================
+
+const inspectionPanelEl = $("terrain-inspection-panel");
+
+const inspectionRowEl = $("inspection-row");
+const inspectionColEl = $("inspection-col");
+
+const inspectionElevationEl = $("inspection-elevation");
+const inspectionSlopeEl = $("inspection-slope");
+const inspectionTerrainTypeEl = $("inspection-terrain-type");
+const inspectionConfidenceEl = $("inspection-confidence");
+const inspectionChangeEl = $("inspection-change");
+const inspectionBeforeEl = $("inspection-before");
+const inspectionDuringEl = $("inspection-during");
+
+
+// ============================================================================
+// DOM — BOTTOM COMMAND BAR
+// ============================================================================
+
+const btnUploadImage = $("btn-upload-image");
+const inputImage = $("input-image");
+
+const btnLoadGlb = $("btn-load-glb");
+const inputGlb = $("input-glb");
+
+const btnLoadGrid = $("btn-load-grid");
+const inputGrid = $("input-grid");
+
+const btnManualNavigation = $("btn-manual-navigation");
+const btnCameraResetBottom = $("btn-camera-reset-bottom");
+
+
+// ============================================================================
+// DOM — LOADING
+// ============================================================================
+
+const loadingOverlayEl = $("loading-overlay");
+const loadingTitleEl = $("loading-title");
+const loadingMessageEl = $("loading-message");
+const loadingProgressEl = $("loading-progress");
+
+
+// ============================================================================
+// DOM — SYSTEM MESSAGE
+// ============================================================================
+
+const systemMessageEl = $("system-message");
+const systemMessageTextEl = $("system-message-text");
+
+
+// ============================================================================
+// TERRAIN MARKER
+// ============================================================================
+
+const terrainMarkerEl = $("terrain-marker");
+
+
+// ============================================================================
+// STATE
+// IMPORTANT: STATE IS CREATED BEFORE applySolarPosition()
+// This fixes the previous "Cannot access activeModel before initialization"
+// error.
+// ============================================================================
+
+let activeModel = null;
+
+let terrainData = null;
+let gridLoaded = false;
+
+let slopeRange = null;
+
+let flying = false;
+let flyPath = null;
+const flyClock = new THREE.Clock(false);
+
+let autoRotateOn = false;
+let wireframeOn = false;
+let hillshadeOn = false;
+let slopeHeatmapOn = false;
+
+let markerWorldPoint = null;
+
+let solarAzimuthDeg = solarAzimuthEl
+  ? Number(solarAzimuthEl.value)
+  : 315;
+
+let solarElevationDeg = solarElevationEl
+  ? Number(solarElevationEl.value)
+  : 42;
+
+let zExaggeration = zExaggerationEl
+  ? Number(zExaggerationEl.value)
+  : 1.0;
+
+let systemMessageHideTimer = null;
+
+
+// ============================================================================
+// SCENE
+// ============================================================================
+
+const scene = new THREE.Scene();
+
+
+// ============================================================================
+// CAMERA
+// ============================================================================
+
+const camera = new THREE.PerspectiveCamera(
+  50,
+  window.innerWidth / window.innerHeight,
+  0.1,
+  30000
+);
+
+camera.up.set(0, 0, 1);
+camera.position.set(500, 500, 500);
+
+
+// ============================================================================
+// RENDERER
+// ============================================================================
+
+const renderer = new THREE.WebGLRenderer({
+  antialias: true,
+  alpha: false,
+  powerPreference: "high-performance",
+});
+
+renderer.setPixelRatio(
+  Math.min(window.devicePixelRatio || 1, 2)
+);
+
+renderer.setSize(
+  window.innerWidth,
+  window.innerHeight
+);
+
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.35;
+
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+renderer.domElement.style.width = "100%";
+renderer.domElement.style.height = "100%";
+renderer.domElement.style.display = "block";
+
+viewerEl.appendChild(renderer.domElement);
+
+
+// ============================================================================
+// BACKGROUND
+// ============================================================================
+
+function createBackground() {
+
+  const canvas = document.createElement("canvas");
+
+  canvas.width = 1024;
+  canvas.height = 1024;
+
+  const ctx = canvas.getContext("2d");
+
+  const gradient = ctx.createRadialGradient(
+    512,
+    350,
+    20,
+    512,
+    512,
+    800
+  );
+
+  gradient.addColorStop(0, "#101c28");
+  gradient.addColorStop(0.35, "#08121c");
+  gradient.addColorStop(0.7, "#03070d");
+  gradient.addColorStop(1, "#010204");
+
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, 1024, 1024);
+
+  const texture = new THREE.CanvasTexture(canvas);
+
+  texture.colorSpace = THREE.SRGBColorSpace;
+
+  scene.background = texture;
+
+
+  // ------------------------------------------------------------
+  // Stars
+  // ------------------------------------------------------------
+
+  function createStars(
+    count,
+    radius,
+    size,
+    opacity
+  ) {
+
+    const positions = new Float32Array(
+      count * 3
+    );
+
+    for (let i = 0; i < count; i++) {
+
+      const r =
+        radius *
+        (0.65 + Math.random() * 0.35);
+
+      const theta =
+        Math.random() *
+        Math.PI *
+        2;
+
+      const phi =
+        Math.acos(
+          2 * Math.random() - 1
+        );
+
+      positions[i * 3] =
+        r *
+        Math.sin(phi) *
+        Math.cos(theta);
+
+      positions[i * 3 + 1] =
+        r *
+        Math.cos(phi);
+
+      positions[i * 3 + 2] =
+        r *
+        Math.sin(phi) *
+        Math.sin(theta);
+    }
+
+    const geometry =
+      new THREE.BufferGeometry();
+
+    geometry.setAttribute(
+      "position",
+      new THREE.BufferAttribute(
+        positions,
+        3
+      )
+    );
+
+    const material =
+      new THREE.PointsMaterial({
+        color: 0xffffff,
+        size,
+        transparent: true,
+        opacity,
+        depthWrite: false,
+        fog: false,
+        sizeAttenuation: true,
+      });
+
+    const points =
+      new THREE.Points(
+        geometry,
+        material
+      );
+
+    scene.add(points);
+  }
+
+  createStars(
+    1400,
+    5000,
+    2,
+    0.5
+  );
+
+  createStars(
+    400,
+    3200,
+    3.5,
+    0.3
+  );
+}
+
+createBackground();
+
+
+// ============================================================================
+// FOG
+// ============================================================================
+
+scene.fog = new THREE.Fog(
+  0x03070d,
+  1800,
+  10000
+);
+
+
+// ============================================================================
+// LIGHTING
+// ============================================================================
+
+const ambient =
+  new THREE.AmbientLight(
+    0xffffff,
+    LIGHT_BASE.ambient
+  );
+
+scene.add(ambient);
+
+
+const hemisphere =
+  new THREE.HemisphereLight(
+    0xeaf4ff,
+    0x756650,
+    LIGHT_BASE.hemisphere
+  );
+
+scene.add(hemisphere);
+
+
+const sun =
+  new THREE.DirectionalLight(
+    0xfff2d9,
+    LIGHT_BASE.sun
+  );
+
+sun.castShadow = true;
+
+sun.shadow.mapSize.set(
+  2048,
+  2048
+);
+
+sun.shadow.camera.left = -1000;
+sun.shadow.camera.right = 1000;
+sun.shadow.camera.top = 1000;
+sun.shadow.camera.bottom = -1000;
+
+sun.shadow.camera.near = 10;
+sun.shadow.camera.far = 5000;
+
+sun.shadow.bias = -0.0003;
+
+scene.add(sun);
+scene.add(sun.target);
+
+
+const fill =
+  new THREE.DirectionalLight(
+    0xdcecff,
+    0.8
+  );
+
+scene.add(fill);
+scene.add(fill.target);
+
+
+// ============================================================================
+// SOLAR POSITION
+// ============================================================================
+
+const SUN_DISTANCE = 1400;
+
+function applySolarPosition() {
+
+  const az =
+    THREE.MathUtils.degToRad(
+      solarAzimuthDeg
+    );
+
+  const el =
+    THREE.MathUtils.degToRad(
+      solarElevationDeg
+    );
+
+  const horizontal =
+    Math.cos(el) *
+    SUN_DISTANCE;
+
+  const center =
+    activeModel?.center ||
+    new THREE.Vector3(
+      0,
+      0,
+      0
+    );
+
+  // Z is the vertical/elevation axis.
+  // Azimuth moves around the X/Y ground plane.
+  sun.position.set(
+    center.x + Math.cos(az) * horizontal,
+    center.y + Math.sin(az) * horizontal,
+    center.z + Math.sin(el) * SUN_DISTANCE
+  );
+
+  sun.target.position.copy(center);
+
+  sun.target.updateMatrixWorld();
+}
+
+
+// ============================================================================
+// NOW IT IS SAFE TO CALL
+// ============================================================================
+
+applySolarPosition();
+
+
+// ============================================================================
+// ORBIT CONTROLS
+// ============================================================================
+
+const controls =
+  new OrbitControls(
+    camera,
+    renderer.domElement
+  );
+
+controls.enableDamping = true;
+controls.dampingFactor = 0.06;
+
+controls.enablePan = true;
+
+controls.screenSpacePanning = false;
+
+controls.mouseButtons = {
+  LEFT: THREE.MOUSE.ROTATE,
+  MIDDLE: THREE.MOUSE.DOLLY,
+  RIGHT: THREE.MOUSE.PAN,
+};
+
+controls.minDistance = 2;
+controls.maxDistance = 15000;
+
+controls.maxPolarAngle =
+  Math.PI * 0.495;
+
+controls.autoRotateSpeed = 1.1;
+
+
+// ============================================================================
+// GLTF LOADER
+// ============================================================================
+
+const loader =
+  new GLTFLoader();
+
+
+
+
+// ============================================================================
+// STATUS FUNCTIONS
+// ============================================================================
+
+function showSystemMessage(
+  text,
+  isError = false
+) {
+
+  if (
+    !systemMessageEl ||
+    !systemMessageTextEl
+  ) {
+    return;
+  }
+
+  systemMessageTextEl.textContent =
+    text;
+
+  systemMessageEl.classList.toggle(
+    "is-error",
+    isError
+  );
+
+  systemMessageEl.classList.add(
+    "is-visible"
+  );
+
+  if (systemMessageHideTimer) {
+    clearTimeout(
+      systemMessageHideTimer
+    );
+  }
+
+  systemMessageHideTimer =
+    setTimeout(() => {
+
+      systemMessageEl.classList.remove(
+        "is-visible"
+      );
+
+    }, isError ? 6000 : 3500);
+}
+
+
+function setSystemStatus(
+  word,
+  isError = false,
+  isBusy = false
+) {
+
+  if (systemStatusIndicatorEl) {
+
+    systemStatusIndicatorEl.classList.toggle(
+      "is-error",
+      isError
+    );
+
+    systemStatusIndicatorEl.classList.toggle(
+      "is-busy",
+      isBusy
+    );
+  }
+
+  if (systemStatusValueEl) {
+    systemStatusValueEl.textContent =
+      word;
+  }
+
+  if (telemetryStatusValueEl) {
+    telemetryStatusValueEl.textContent =
+      word;
+  }
+}
+
+
+function setStatus(
+  text,
+  isError = false
+) {
+
+  showSystemMessage(
+    text,
+    isError
+  );
+
+  setSystemStatus(
+    isError
+      ? "ERROR"
+      : "READY",
+    isError,
+    false
+  );
+
+  if (isError) {
+    console.error(
+      "[SASA MINE]",
+      text
+    );
+  } else {
+    console.log(
+      "[SASA MINE]",
+      text
+    );
+  }
+}
+
+
+function setStatusBusy(text) {
+
+  showSystemMessage(
+    text,
+    false
+  );
+
+  setSystemStatus(
+    "BUSY",
+    false,
+    true
+  );
+
+  console.log(
+    "[SASA MINE]",
+    text
+  );
+}
+
+
+function setRowStatus(
+  indicatorEl,
+  valueEl,
+  value,
+  state
+) {
+
+  if (valueEl) {
+    valueEl.textContent =
+      value;
+  }
+
+  if (indicatorEl) {
+
+    indicatorEl.classList.toggle(
+      "is-busy",
+      state === "busy"
+    );
+
+    indicatorEl.classList.toggle(
+      "is-error",
+      state === "error"
+    );
+  }
+}
+
+
+// ============================================================================
+// LOADING OVERLAY
+// ============================================================================
+
+function showLoading(
+  title = "SASA MINE",
+  message = "Loading terrain model..."
+) {
+
+  if (loadingTitleEl) {
+    loadingTitleEl.textContent =
+      title;
+  }
+
+  if (loadingMessageEl) {
+    loadingMessageEl.textContent =
+      message;
+  }
+
+  if (loadingProgressEl) {
+    loadingProgressEl.textContent =
+      "0%";
+  }
+
+  loadingOverlayEl?.classList.remove(
+    "is-hidden"
+  );
+}
+
+
+function updateLoadingProgress(
+  percent
+) {
+
+  if (loadingProgressEl) {
+
+    loadingProgressEl.textContent =
+      `${Math.round(percent)}%`;
+  }
+}
+
+
+function hideLoading() {
+  const overlay = document.getElementById("loading-overlay");
+
+  if (overlay) {
+    overlay.classList.add("is-hidden");
+    overlay.style.display = "none";
+    overlay.style.visibility = "hidden";
+    overlay.style.opacity = "0";
+    overlay.style.pointerEvents = "none";
+  }
+}
+
+// ============================================================================
+// TABS
+// ============================================================================
+
+tabEls.forEach((tab) => {
+
+  tab.addEventListener(
+    "click",
+    () => {
+
+      tabEls.forEach(
+        (t) =>
+          t.classList.remove(
+            "is-active"
+          )
+      );
+
+      tab.classList.add(
+        "is-active"
+      );
+    }
+  );
+
+});
+
+
+// ============================================================================
+// NAVIGATION ITEMS
+// ============================================================================
+
+navItemEls.forEach(
+  (item) => {
+
+    item.addEventListener(
+      "click",
+      () => {
+
+        navItemEls.forEach(
+          (i) => {
+
+            i.classList.remove(
+              "is-active"
+            );
+
+            i.removeAttribute(
+              "aria-current"
+            );
+
+          }
+        );
+
+        item.classList.add(
+          "is-active"
+        );
+
+        item.setAttribute(
+          "aria-current",
+          "true"
+        );
+      }
+    );
+
+  }
+);
+
+
+// ============================================================================
+// MODEL PREPARATION
+// ============================================================================
+
+function prepareModel(root) {
+
+  const maxAnisotropy =
+    renderer.capabilities
+      .getMaxAnisotropy();
+
+
+  root.traverse(
+    (object) => {
+
+      if (!object.isMesh) {
+        return;
+      }
+
+      object.castShadow = true;
+      object.receiveShadow = true;
+
+
+      // ------------------------------------------------------------
+      // Normals
+      // ------------------------------------------------------------
+
+      if (
+        object.geometry &&
+        !object.geometry.attributes.normal
+      ) {
+
+        object.geometry.computeVertexNormals();
+
+      }
+
+
+      // ------------------------------------------------------------
+      // Materials
+      // ------------------------------------------------------------
+
+      const materials =
+        Array.isArray(object.material)
+          ? object.material
+          : [object.material];
+
+
+      materials.forEach(
+        (material) => {
+
+          if (!material) {
+            return;
+          }
+
+          material.side =
+            THREE.DoubleSide;
+
+
+          if (material.map) {
+
+            material.map.colorSpace =
+              THREE.SRGBColorSpace;
+
+            material.map.anisotropy =
+              maxAnisotropy;
+
+            material.map.needsUpdate =
+              true;
+          }
+
+
+          // Keep original GLB material.
+          if (
+            material.isMeshStandardMaterial ||
+            material.isMeshPhysicalMaterial
+          ) {
+
+            material.metalness =
+              Math.min(
+                material.metalness ?? 0,
+                0.25
+              );
+
+            material.roughness =
+              Math.max(
+                material.roughness ?? 0.8,
+                0.5
+              );
+          }
+
+          material.needsUpdate =
+            true;
+        }
+      );
+
+    }
+  );
+
+
+  // ------------------------------------------------------------
+  // Person 3 output is already Z-UP.
+  // X/Y = terrain plane, Z = elevation.
+  // No axis rotation is applied here.
+  // ------------------------------------------------------------
+
+  root.rotation.set(0, 0, 0);
+  root.updateMatrixWorld(true);
+
+  // ------------------------------------------------------------
+  // Center only the horizontal X/Y position.
+  // Keep Z as the actual elevation axis.
+  // ------------------------------------------------------------
+
+  const box =
+    new THREE.Box3()
+      .setFromObject(root);
+
+  const center =
+    box.getCenter(
+      new THREE.Vector3()
+    );
+
+  root.position.x -= center.x;
+  root.position.y -= center.y;
+
+  root.updateMatrixWorld(true);
+
+
+  // ------------------------------------------------------------
+  // Final dimensions
+  // ------------------------------------------------------------
+
+  const finalBox =
+    new THREE.Box3()
+      .setFromObject(root);
+
+  const size =
+    finalBox.getSize(
+      new THREE.Vector3()
+    );
+
+  const finalCenter =
+    finalBox.getCenter(
+      new THREE.Vector3()
+    );
+
+
+  // ------------------------------------------------------------
+  // Vertex count
+  // ------------------------------------------------------------
+
+  let vertexCount = 0;
+
+  root.traverse(
+    (object) => {
+
+      if (
+        object.isMesh &&
+        object.geometry?.attributes?.position
+      ) {
+
+        vertexCount +=
+          object.geometry
+            .attributes
+            .position
+            .count;
+      }
+
+    }
+  );
+
+
+  return {
+    size,
+    center: finalCenter,
+    vertexCount,
+  };
+}
+
+
+// ============================================================================
+// FRAME MODEL
+// ============================================================================
+
+function frameModel(model) {
+
+  if (!model) {
+    return;
+  }
+
+  const {
+    size,
+    center,
+  } = model;
+
+
+  const radius =
+    Math.max(
+      size.length() / 2,
+      10
+    );
+
+
+  const fov =
+    THREE.MathUtils.degToRad(
+      camera.fov
+    );
+
+
+  const distance =
+    (radius /
+      Math.sin(fov / 2)) *
+    1.25;
+
+
+  const direction =
+    new THREE.Vector3(
+      1,
+      0.8,
+      0.85
+    ).normalize();
+
+
+  camera.position.copy(
+    center
+  );
+
+  camera.position.addScaledVector(
+    direction,
+    distance
+  );
+
+
+  camera.near =
+    Math.max(
+      distance / 1000,
+      0.05
+    );
+
+  camera.far =
+    Math.max(
+      distance * 10,
+      10000
+    );
+
+  camera.updateProjectionMatrix();
+
+
+  controls.target.copy(
+    center
+  );
+
+  controls.minDistance =
+    Math.max(
+      size.length() * 0.005,
+      1
+    );
+
+  controls.maxDistance =
+    Math.max(
+      distance * 8,
+      5000
+    );
+
+  controls.update();
+
+
+  sun.target.position.copy(
+    center
+  );
+
+  sun.target.updateMatrixWorld();
+
+  fill.target.position.copy(
+    center
+  );
+
+  fill.target.updateMatrixWorld();
+
+
+  applySolarPosition();
+
+  clearCameraPresetActive();
+}
+
+
+// ============================================================================
+// CAMERA PRESET ACTIVE
+// ============================================================================
+
+function clearCameraPresetActive() {
+
+  [
+    btnCameraTop,
+    btnCameraIso,
+    btnCameraProfile,
+    btnCameraResetPreset,
+  ].forEach(
+    (btn) =>
+      btn?.classList.remove(
+        "is-active"
+      )
+  );
+}
+
+
+// ============================================================================
+// CAMERA PRESETS
+// ============================================================================
+
+function applyCameraPreset(
+  kind,
+  button
+) {
+
+  if (!activeModel) {
+
+    setStatus(
+      "Load a terrain before selecting a camera preset.",
+      true
+    );
+
+    return;
+  }
+
+
+  stopFlythrough(false);
+  setAutoRotate(false);
+
+  controls.enabled = true;
+
+
+  const {
+    size,
+    center,
+  } = activeModel;
+
+
+  const radius =
+    Math.max(
+      size.length() / 2,
+      10
+    );
+
+
+  const fov =
+    THREE.MathUtils.degToRad(
+      camera.fov
+    );
+
+
+  const distance =
+    (radius /
+      Math.sin(fov / 2)) *
+    1.3;
+
+
+  let direction;
+
+
+  if (kind === "top") {
+
+    direction =
+      new THREE.Vector3(
+        0.001,
+        0.001,
+        1
+      ).normalize();
+
+  }
+
+  else if (kind === "iso") {
+
+    direction =
+      new THREE.Vector3(
+        1,
+        0.9,
+        0.85
+      ).normalize();
+
+  }
+
+  else if (kind === "profile") {
+
+    direction =
+      new THREE.Vector3(
+        0,
+        1,
+        0.12
+      ).normalize();
+
+  }
+
+  else {
+
+    direction =
+      new THREE.Vector3(
+        1,
+        0.7,
+        0.85
+      ).normalize();
+
+  }
+
+
+  camera.position.copy(
+    center
+  );
+
+  camera.position.addScaledVector(
+    direction,
+    distance
+  );
+
+
+  camera.near =
+    Math.max(
+      distance / 1000,
+      0.05
+    );
+
+  camera.far =
+    Math.max(
+      distance * 10,
+      10000
+    );
+
+  camera.updateProjectionMatrix();
+
+
+  controls.target.copy(
+    center
+  );
+
+  controls.update();
+
+
+  clearCameraPresetActive();
+
+  button?.classList.add(
+    "is-active"
+  );
+
+
+  setStatus(
+    `Camera preset: ${kind}`
+  );
+}
+
+
+btnCameraTop?.addEventListener(
+  "click",
+  () =>
+    applyCameraPreset(
+      "top",
+      btnCameraTop
+    )
+);
+
+
+btnCameraIso?.addEventListener(
+  "click",
+  () =>
+    applyCameraPreset(
+      "iso",
+      btnCameraIso
+    )
+);
+
+
+btnCameraProfile?.addEventListener(
+  "click",
+  () =>
+    applyCameraPreset(
+      "profile",
+      btnCameraProfile
+    )
+);
+
+
+btnCameraResetPreset?.addEventListener(
+  "click",
+  resetCamera
+);
+
+
+// ============================================================================
+// DISPOSE MODEL
+// ============================================================================
+
+function disposeModel(model) {
+
+  if (!model?.root) {
+    return;
+  }
+
+
+  model.root.traverse(
+    (object) => {
+
+      if (!object.isMesh) {
+        return;
+      }
+
+
+      if (object.geometry) {
+        object.geometry.dispose();
+      }
+
+
+      const materials =
+        Array.isArray(object.material)
+          ? object.material
+          : [object.material];
+
+
+      materials.forEach(
+        (material) => {
+
+          if (!material) {
+            return;
+          }
+
+
+          // Dispose textures.
+          [
+            "map",
+            "normalMap",
+            "roughnessMap",
+            "metalnessMap",
+            "aoMap",
+            "emissiveMap",
+            "alphaMap",
+            "bumpMap",
+          ].forEach(
+            (key) => {
+
+              if (
+                material[key] &&
+                material[key].isTexture
+              ) {
+
+                material[key].dispose();
+              }
+
+            }
+          );
+
+
+          material.dispose();
+        }
+      );
+
+    }
+  );
+
+
+  scene.remove(
+    model.root
+  );
+}
+
+
+// ============================================================================
+// LOAD GLB FROM URL
+// ============================================================================
+
+function loadGLBFromURL(
+  url,
+  label = "Terrain Model",
+  revokeURL = false
+) {
+
+  return new Promise(
+    (resolve, reject) => {
+
+      if (!url) {
+
+        setStatus(
+          "No GLB file selected.",
+          true
+        );
+
+        reject(
+          new Error("No GLB URL")
+        );
+
+        return;
+      }
+
+
+      showLoading(
+        "SASA MINE",
+        `Loading ${label}...`
+      );
+
+
+      setStatusBusy(
+        "Loading terrain model..."
+      );
+
+
+      setRowStatus(
+        statusIndicatorModelEl,
+        statusValueModelEl,
+        "Loading...",
+        "busy"
+      );
+
+
+      stopFlythrough(false);
+
+
+      loader.load(
+
+        url,
+
+
+        // ======================================================
+        // SUCCESS
+        // ======================================================
+
+        (gltf) => {
+
+          try {
+
+            const root =
+              gltf.scene;
+
+
+            if (!root) {
+
+              throw new Error(
+                "GLB scene is empty."
+              );
+            }
+
+
+            // Remove previous model FIRST.
+            const oldModel =
+              activeModel;
+
+
+            if (oldModel) {
+
+              disposeModel(
+                oldModel
+              );
+
+              activeModel =
+                null;
+            }
+
+
+            // Add new model.
+            scene.add(root);
+
+
+            const measurements =
+              prepareModel(
+                root
+              );
+
+
+            activeModel = {
+
+              root,
+
+              size:
+                measurements.size,
+
+              center:
+                measurements.center,
+
+              vertexCount:
+                measurements.vertexCount,
+
+              meshRows:
+                DEFAULT_MESH_ROWS,
+
+              meshCols:
+                DEFAULT_MESH_COLS,
+
+              gridRows:
+                terrainData?.rows ??
+                GRID_ROWS,
+
+              gridCols:
+                terrainData?.cols ??
+                GRID_COLS,
+
+              samplingStep:
+                DEFAULT_GRID_STEP,
+            };
+
+
+            // ------------------------------------------------
+            // Apply existing display states
+            // ------------------------------------------------
+
+            applyWireframeState();
+
+            applySlopeHeatmapState();
+
+            applyZExaggeration();
+
+
+            // ------------------------------------------------
+            // Camera
+            // ------------------------------------------------
+
+            frameModel(
+              activeModel
+            );
+
+
+            clearInspection();
+
+            hideLoading();
+
+
+            // ------------------------------------------------
+            // Status
+            // ------------------------------------------------
+
+            setRowStatus(
+              statusIndicatorModelEl,
+              statusValueModelEl,
+              label,
+              "ok"
+            );
+
+
+            setRowStatus(
+              statusIndicatorRenderEl,
+              statusValueRenderEl,
+              "READY",
+              "ok"
+            );
+
+
+            setRowStatus(
+              statusIndicatorCameraEl,
+              statusValueCameraEl,
+              "READY",
+              "ok"
+            );
+
+
+            if (
+              telemetryModelValueEl
+            ) {
+
+              telemetryModelValueEl.textContent =
+                label;
+            }
+
+
+            updateModelMetadataPanels(
+              label
+            );
+
+
+            setStatus(
+              `Model loaded: ${label}`
+            );
+
+
+            if (revokeURL) {
+              URL.revokeObjectURL(
+                url
+              );
+            }
+
+
+            resolve(
+              activeModel
+            );
+
+          }
+
+          catch (error) {
+
+            console.error(
+              "[SASA MINE] Model preparation error:",
+              error
+            );
+
+
+            hideLoading();
+
+
+            setRowStatus(
+              statusIndicatorModelEl,
+              statusValueModelEl,
+              "ERROR",
+              "error"
+            );
+
+
+            setStatus(
+              "GLB loaded but could not be prepared.",
+              true
+            );
+
+
+            if (revokeURL) {
+              URL.revokeObjectURL(
+                url
+              );
+            }
+
+
+            reject(error);
+          }
+        },
+
+
+        // ======================================================
+        // PROGRESS
+        // ======================================================
+
+        (progress) => {
+
+          if (
+            progress &&
+            progress.total > 0
+          ) {
+
+            updateLoadingProgress(
+              (
+                progress.loaded /
+                progress.total
+              ) * 100
+            );
+          }
+        },
+
+
+        // ======================================================
+        // ERROR
+        // ======================================================
+
+        (error) => {
+
+          console.error(
+            "[SASA MINE] GLB ERROR:",
+            error
+          );
+
+
+          hideLoading();
+
+
+          setRowStatus(
+            statusIndicatorModelEl,
+            statusValueModelEl,
+            "ERROR",
+            "error"
+          );
+
+
+          setStatus(
+            "Could not load this GLB file. Check the browser console.",
+            true
+          );
+
+
+          if (revokeURL) {
+            URL.revokeObjectURL(
+              url
+            );
+          }
+
+
+          reject(error);
+        }
+      );
+
+    }
+  );
+}
+
+
+// ============================================================================
+// LOAD GLB FROM FILE
+// ============================================================================
+
+function loadGLBFromFile(file) {
+
+  if (!file) {
+    return;
+  }
+

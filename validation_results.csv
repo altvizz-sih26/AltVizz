@@ -1,0 +1,5 @@
+region,mae,rmse,correlation
+urban,0.0,0.0,1.0
+vegetation,0.0,0.0,1.0
+bare_terrain,0.0,0.0,0.9999999999999998
+OVERALL,0.0,0.0,1.0

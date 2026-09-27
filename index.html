@@ -1,0 +1,399 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SASA MINE — 3D Terrain Reconstruction</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <div id="app">
+
+      <!-- ============================================================ -->
+      <!-- TOP COMMAND BAR                                                -->
+      <!-- ============================================================ -->
+
+      <header id="topbar">
+        <div class="topbar-brand" id="topbar-brand">
+          <span class="brand-subtitle" id="brand-heading">3D Terrain Reconstruction</span>
+          <span class="brand-version" id="system-version">SYS v0.1</span>
+        </div>
+
+        <div class="topbar-telemetry" id="topbar-telemetry">
+          <div class="telemetry-item" id="telemetry-model">
+            <span class="telemetry-label">Model</span>
+            <span class="telemetry-value" id="telemetry-model-value">---</span>
+          </div>
+          <div class="telemetry-item" id="telemetry-status">
+            <span class="telemetry-label">Telemetry</span>
+            <span class="telemetry-value" id="telemetry-status-value">---</span>
+          </div>
+          <div class="telemetry-item" id="system-status">
+            <span class="status-indicator" id="system-status-indicator"></span>
+            <span class="telemetry-value" id="system-status-value">READY</span>
+          </div>
+        </div>
+      </header>
+
+      <!-- ============================================================ -->
+      <!-- LEFT OPERATIONAL SIDEBAR                                       -->
+      <!-- ============================================================ -->
+
+      <aside id="left-sidebar">
+        <div class="sidebar-section" id="sidebar-section-status">
+          <h2 class="sidebar-title">System Status</h2>
+          <ul id="system-status-list" class="status-list">
+            <li class="status-row" id="status-row-model">
+              <span class="status-indicator" id="status-indicator-model"></span>
+              <span class="status-label">Model</span>
+              <span class="status-value" id="status-value-model">---</span>
+            </li>
+            <li class="status-row" id="status-row-grid">
+              <span class="status-indicator" id="status-indicator-grid"></span>
+              <span class="status-label">Grid</span>
+              <span class="status-value" id="status-value-grid">---</span>
+            </li>
+            <li class="status-row" id="status-row-render">
+              <span class="status-indicator" id="status-indicator-render"></span>
+              <span class="status-label">Render</span>
+              <span class="status-value" id="status-value-render">---</span>
+            </li>
+            <li class="status-row" id="status-row-camera">
+              <span class="status-indicator" id="status-indicator-camera"></span>
+              <span class="status-label">Camera</span>
+              <span class="status-value" id="status-value-camera">---</span>
+            </li>
+          </ul>
+        </div>
+      </aside>
+
+      <!-- ============================================================ -->
+      <!-- MAIN VIEWPORT                                                  -->
+      <!-- ============================================================ -->
+
+      <main id="main-content">
+        <section id="viewport-panel">
+
+          <div id="viewport-toolbar">
+            <div class="toolbar-left" id="viewport-toolbar-left">
+              <span class="toolbar-label">Camera Orbit</span>
+              <span class="toolbar-stat">AZ <span id="viewport-azimuth">---</span></span>
+              <span class="toolbar-stat">PITCH <span id="viewport-pitch">---</span></span>
+            </div>
+            <div class="toolbar-right" id="viewport-toolbar-right">
+              <button type="button" class="toolbar-btn" id="btn-auto-rotate">Auto Rotate</button>
+            </div>
+          </div>
+
+          <!-- Three.js canvas is mounted here by main.js -->
+          <div id="viewer" aria-label="3D terrain viewport"></div>
+
+          <div id="viewport-info">
+            <div class="info-item" id="info-georef">
+              <span class="info-label">Geo Ref</span>
+              <span class="info-value" id="viewport-georef">---</span>
+            </div>
+            <div class="info-item" id="info-cursor-alt">
+              <span class="info-label">Cursor Alt</span>
+              <span class="info-value" id="viewport-cursor-alt">---</span>
+            </div>
+            <div class="info-item" id="info-grid">
+              <span class="info-label">Grid</span>
+              <span class="info-value" id="viewport-grid">---</span>
+            </div>
+            <div class="info-item" id="info-mesh">
+              <span class="info-label">Mesh</span>
+              <span class="info-value" id="viewport-mesh">---</span>
+            </div>
+          </div>
+
+          <div id="camera-presets">
+            <span class="presets-label">Camera Presets</span>
+            <button type="button" class="preset-btn" id="btn-camera-top">Top-Down</button>
+            <button type="button" class="preset-btn" id="btn-camera-iso">Iso 45°</button>
+            <button type="button" class="preset-btn" id="btn-camera-profile">Profile</button>
+            <button type="button" class="preset-btn" id="btn-camera-reset">Reset</button>
+          </div>
+
+          <div id="flythrough-controls">
+            <button type="button" id="btn-flythrough-start">Go To 3D Flythrough</button>
+            <button type="button" id="btn-flythrough-stop">Stop Flythrough</button>
+          </div>
+
+        </section>
+      </main>
+
+      <!-- ============================================================ -->
+      <!-- RIGHT ANALYSIS SIDEBAR                                         -->
+      <!-- ============================================================ -->
+
+      <aside id="right-sidebar">
+
+        <section class="analysis-card" id="elevation-profile-card">
+          <h2 class="card-header">Elevation Profile</h2>
+
+          <div class="card-row">
+            <span class="card-label">Peak</span>
+            <span class="card-value" id="elevation-peak">--</span>
+          </div>
+          <div class="card-row">
+            <span class="card-label">Base</span>
+            <span class="card-value" id="elevation-base">--</span>
+          </div>
+          <div class="card-row">
+            <span class="card-label">Total Relief</span>
+            <span class="card-value" id="elevation-relief">--</span>
+          </div>
+
+          <!-- ==========================================================
+               ELEVATION LEGEND
+               Reference scale for the "Elevation Color" toggle in
+               Surface Shading — populated whenever grid data loads,
+               regardless of whether the toggle is currently on.
+               ========================================================== -->
+          <div id="elevation-legend" aria-label="Elevation color scale">
+            <div id="elevation-legend-ramp"></div>
+            <div id="elevation-legend-labels">
+              <span id="elevation-legend-min">---</span>
+              <span id="elevation-legend-mid">---</span>
+              <span id="elevation-legend-max">---</span>
+            </div>
+          </div>
+
+          <!-- Container only — chart is drawn/updated by JS later -->
+          <div id="elevation-profile-chart" aria-label="Elevation profile chart"></div>
+        </section>
+
+        <section class="analysis-card" id="analysis-map-card">
+          <h2 class="card-header">Analysis Map</h2>
+          <p class="card-description">
+            Top-down elevation view. Click the 3D terrain to mark a point here,
+            or drag a rectangle on this map to select a region.
+          </p>
+
+          <div id="analysis-map" aria-label="Top-down elevation analysis map">
+            <canvas id="analysis-map-canvas" width="512" height="512"></canvas>
+            <div id="analysis-map-marker"></div>
+            <div id="analysis-map-selection"></div>
+          </div>
+
+          <p class="card-description" id="analysis-map-empty-note">
+            Load a terrain with elevation data to see the map.
+          </p>
+        </section>
+
+        <section class="analysis-card" id="region-analysis-panel">
+          <h2 class="card-header">Region Analysis</h2>
+
+          <p id="region-placeholder" class="inspection-placeholder">
+            Drag a rectangle on the Analysis Map to inspect a region.
+          </p>
+
+          <div id="region-details" class="inspection-details">
+            <div class="card-row">
+              <span class="card-label">Points in Region</span>
+              <span class="card-value" id="region-count">---</span>
+            </div>
+            <div class="card-row">
+              <span class="card-label">Avg Elevation Change</span>
+              <span class="card-value" id="region-avg-change">---</span>
+            </div>
+            <div class="card-row">
+              <span class="card-label">Min / Max Change</span>
+              <span class="card-value" id="region-minmax-change">---</span>
+            </div>
+            <div class="card-row">
+              <span class="card-label">Avg Elevation</span>
+              <span class="card-value" id="region-avg-elevation">---</span>
+            </div>
+            <div class="card-row">
+              <span class="card-label">Significant Change Points</span>
+              <span class="card-value" id="region-significant-count">---</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="analysis-card" id="mesh-metadata-card">
+          <h2 class="card-header">Mesh Metadata</h2>
+
+          <div class="card-row">
+            <span class="card-label">Dataset</span>
+            <span class="card-value" id="metadata-dataset">---</span>
+          </div>
+          <div class="card-row">
+            <span class="card-label">Elevation Range</span>
+            <span class="card-value" id="metadata-elevation-range">---</span>
+          </div>
+          <div class="card-row">
+            <span class="card-label">Spatial Resolution</span>
+            <span class="card-value" id="metadata-resolution">---</span>
+          </div>
+          <div class="card-row">
+            <span class="card-label">Coordinates</span>
+            <span class="card-value" id="metadata-coordinates">Not provided by pipeline yet</span>
+          </div>
+          <div class="card-row">
+            <span class="card-label">Datum</span>
+            <span class="card-value" id="metadata-datum">Not provided by pipeline yet</span>
+          </div>
+          <div class="card-row">
+            <span class="card-label">Calibration</span>
+            <span class="card-value" id="metadata-calibration">Relative depth (uncalibrated)</span>
+          </div>
+          <div class="card-row">
+            <span class="card-label">Grid</span>
+            <span class="card-value" id="metadata-grid">---</span>
+          </div>
+          <div class="card-row">
+            <span class="card-label">Mesh</span>
+            <span class="card-value" id="metadata-mesh">---</span>
+          </div>
+        </section>
+
+        <section class="analysis-card" id="surface-shading-card">
+          <h2 class="card-header">Surface Shading</h2>
+
+          <p class="card-description">
+            Slope uses the analysis file's values when it provides them,
+            or an estimate calculated from the elevation grid when it doesn't.
+          </p>
+
+          <div class="card-toggle-row" id="surface-shading-toggles">
+            <button type="button" class="toggle-btn" id="btn-hillshade">Hillshade</button>
+            <button type="button" class="toggle-btn" id="btn-wireframe">Wireframe</button>
+            <button type="button" class="toggle-btn" id="btn-slope-heatmap">Slope Heatmap</button>
+            <button type="button" class="toggle-btn" id="btn-elevation-color">Elevation Color</button>
+            <button type="button" class="toggle-btn" id="btn-terrain-texture">Reset Shading</button>
+          </div>
+        </section>
+
+        <section class="analysis-card" id="terrain-inspection-panel">
+          <h2 class="card-header">Terrain Inspection</h2>
+
+          <p id="inspection-placeholder" class="inspection-placeholder">
+            Click the terrain to inspect a point.
+          </p>
+
+          <div id="inspection-details" class="inspection-details">
+            <div class="card-row">
+              <span class="card-label">Grid Row</span>
+              <span class="card-value" id="inspection-row">---</span>
+            </div>
+            <div class="card-row">
+              <span class="card-label">Grid Column</span>
+              <span class="card-value" id="inspection-col">---</span>
+            </div>
+            <div class="card-row">
+              <span class="card-label">Elevation</span>
+              <span class="card-value" id="inspection-elevation">---</span>
+            </div>
+            <div class="card-row">
+              <span class="card-label">Slope</span>
+              <span class="card-value" id="inspection-slope">---</span>
+            </div>
+            <div class="card-row">
+              <span class="card-label">Terrain Type</span>
+              <span class="card-value" id="inspection-terrain-type">---</span>
+            </div>
+            <div class="card-row">
+              <span class="card-label">Confidence</span>
+              <span class="card-value" id="inspection-confidence">---</span>
+            </div>
+            <div class="card-row">
+              <span class="card-label">Elevation Change</span>
+              <span class="card-value" id="inspection-change">---</span>
+            </div>
+            <div class="card-row">
+              <span class="card-label">Before</span>
+              <span class="card-value" id="inspection-before">---</span>
+            </div>
+            <div class="card-row">
+              <span class="card-label">During</span>
+              <span class="card-value" id="inspection-during">---</span>
+            </div>
+          </div>
+        </section>
+
+      </aside>
+
+      <!-- ============================================================ -->
+      <!-- BOTTOM COMMAND BAR                                             -->
+      <!-- ============================================================ -->
+
+      <footer id="bottom-command-bar">
+        <!-- ==============================================================
+             REMOVED: the "Source" command group (Upload Image, Load GLB,
+             Load Grid Data). This viewer never receives data through a
+             manual UI action — it consumes a finished GLB + grid JSON
+             that Person 6's pipeline hands it via ?glb=&grid= URL
+             parameters (see main.js). Model/Grid load status is still
+             visible in the left sidebar's System Status panel.
+             ============================================================== -->
+
+        <div class="command-group" id="command-camera">
+          <span class="command-label">Camera</span>
+          <button type="button" id="btn-manual-navigation">Manual Navigation</button>
+          <button type="button" id="btn-camera-reset-bottom">Reset Camera</button>
+        </div>
+
+        <!-- ==============================================================
+             BEFORE / AFTER TERRAIN COMPARISON
+             Lives in the bottom bar (not floating over the viewport) so
+             it never covers the camera preset buttons. Hidden by default
+             — main.js only reveals it once both GLBs are loaded AND their
+             vertex topology actually matches.
+             ============================================================== -->
+        <div class="command-group is-hidden" id="comparison-dock">
+          <span class="command-label">Before / After</span>
+          <input
+            type="range"
+            id="comparison-slider"
+            min="0"
+            max="100"
+            step="1"
+            value="100"
+            aria-label="Terrain before/after comparison"
+          />
+          <span class="comparison-value" id="comparison-value">100%</span>
+        </div>
+      </footer>
+
+      <!-- ============================================================ -->
+      <!-- LOADING OVERLAY                                                -->
+      <!-- ============================================================ -->
+
+      <div id="loading-overlay" class="is-hidden">
+        <div id="loading-card">
+          <div id="loading-title">Initializing Terrain Viewer</div>
+          <div id="loading-message">Loading terrain model...</div>
+          <div id="loading-progress">0%</div>
+          <div id="loading-bar">
+            <div id="loading-bar-fill"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ============================================================ -->
+      <!-- ERROR / SYSTEM MESSAGE                                         -->
+      <!-- ============================================================ -->
+
+      <div id="system-message">
+        <span id="system-message-text"></span>
+      </div>
+
+      <!-- ============================================================ -->
+      <!-- INSPECTION MARKER (2D overlay marker; JS positions/toggles it) -->
+      <!-- ============================================================ -->
+
+      <div id="terrain-marker" aria-hidden="true"></div>
+
+    </div>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
