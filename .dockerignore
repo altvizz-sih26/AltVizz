@@ -1,0 +1,8 @@
+node_modules
+src
+public
+.git
+*.md
+app/results/
+app/uploads/
+depthwizard.db
