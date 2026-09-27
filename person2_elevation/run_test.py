@@ -4,10 +4,10 @@ from depth_loader import load_and_validate_depth
 from elevation_pipeline import generate_elevation, CLASS_NAMES
 
 # ---- ONLY place filenames should ever appear ----
-DEPTH_PATH = "person2_elevation/vegetation_1_depth.npy"
-SRTM_PATH = "person2_elevation/srtm_vegetation_aligned.tif"
-TERRAIN_MASK_PATH = "person2_elevation/terrain_mask.npy"
-OUTPUT_NAME = "vegetation"
+DEPTH_PATH = "person2_elevation/urban_1_depth.npy"
+SRTM_PATH = "person2_elevation/srtm_urban_aligned.tif"
+TERRAIN_MASK_PATH = "person2_elevation/urban_1_terrain_mask.npy"
+OUTPUT_NAME = "urban"
 # --------------------------------------------------
 
 depth = load_and_validate_depth(DEPTH_PATH)
@@ -22,9 +22,10 @@ if meta["mode"] != "relative":
     print(f"Max absolute error: {meta['error_max']:.2f} meters")
     print(f"Correlation: {meta['correlation']:.3f}")
     print("Per-class fit report:")
-    for cls, (a, b, n) in meta["fit_report"].items():
-        name = CLASS_NAMES.get(cls, cls) if isinstance(cls, int) else cls
-        print(f"  {name}: a={a:.2f}, b={b:.2f}, pixels={n}")
+    for cls, (coeffs, n) in meta["fit_report"].items():
+        name = CLASS_NAMES.get(int(cls), cls)
+        coeffs_str = ", ".join(f"{c:.3f}" for c in coeffs)
+        print(f"  {name}: coeffs=[{coeffs_str}], pixels={n}")
 
 np.save(f"person2_elevation/final_elevation_{OUTPUT_NAME}.npy", elevation)
 

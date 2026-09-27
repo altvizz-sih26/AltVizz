@@ -6,3 +6,11 @@ PROJECT DOSSIER.docx
 *.tif
 srtm_tiles/
 __pycache__/
+# Large datasets
+gamus_test/
+person2_elevation/diff_output/
+person2_elevation/gamus_split.npz
+
+# Large NPZ / H5 files
+*.npz
+*.h5
