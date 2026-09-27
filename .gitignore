@@ -1,3 +1,11 @@
+.DS_Store
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+gamus_dataset/GAMUS/
+Depth_Wizard/Depth-Anything-V2/checkpoints/depth_anything_v2_vits.pth
+gamus_finetune/runs/
+runs/
 # Logs
 logs
 *.log
