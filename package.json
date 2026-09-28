@@ -1,7 +1,7 @@
 {
-  "name": "image-2",
-  "version": "0.1.0",
+  "name": "sasa-mine-viewer",
   "private": true,
+  "version": "0.1.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -15,5 +15,11 @@
     "react-router-dom": "latest",
     "three": "^0.186.0",
     "vite": "latest"
+    "fflate": "^0.8.3",
+    "geotiff": "^3.0.5",
+    "three": "^0.180.0"
+  },
+  "devDependencies": {
+    "vite": "^7.1.7"
   }
 }
