@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "dependencies": "^0.0.1",
     "react": "latest",
     "react-dom": "latest",
     "react-router-dom": "latest",
