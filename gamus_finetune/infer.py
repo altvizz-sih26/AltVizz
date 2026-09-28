@@ -1,8 +1,22 @@
 """
 Inference with the fine-tuned GAMUS height model — separate from, and not
-a replacement for, DA-V2's own run.py. Produces `<name>_height.npy` per
-image by default; pass --visualize to also save a colorized RGB+height
-preview PNG per image (off by default, since you don't always want it).
+a replacement for, DA-V2's own run.py. For each image it saves:
+
+    <name>_height_meters.npy      raw metric height in meters (can be negative)
+    <name>_height_normalized.npy  float32, min-max to [0, 1], matches the
+                                  depth_loader.py format contract
+    <name>_terrain_mask.npy       uint8 class IDs 0..5 from the project's own
+                                  terrain_classifier (urban, vegetation,
+                                  bare_terrain, water, shadow, unknown);
+                                  skip with --skip-terrain
+
+Pass --visualize to also save a colorized RGB+height preview PNG, and a
+terrain mask preview PNG (both off by default).
+
+The terrain mask comes from terrain_classifier.classify_terrain, imported
+unmodified and run on the same raw image at its original resolution, so it
+lines up pixel-for-pixel with the height arrays. Class IDs are passed
+through exactly as the classifier produces them (no remapping).
 
 Reuses DA-V2's own, unmodified `image2tensor` preprocessing (the same
 resize-to-multiple-of-14 + ImageNet normalize that run.py's infer_image()
@@ -11,20 +25,18 @@ uses internally), then runs the FIXED forward pass from gamus_finetune
 negative heights real GAMUS data has near ground level.
 
 Usage:
-    # .npy only (default)
-    python infer.py \\
+    # height + terrain mask (default)
+    python3 infer.py \\
         --img-path /path/to/image_or_folder \\
         --checkpoint runs/gamus_vits_run1/best.pt \\
         --da2-checkpoint /path/to/depth_anything_v2_vits.pth \\
         --encoder vits
 
-    # .npy + preview PNGs
-    python infer.py \\
-        --img-path /path/to/image_or_folder \\
-        --checkpoint runs/gamus_vits_run1/best.pt \\
-        --da2-checkpoint /path/to/depth_anything_v2_vits.pth \\
-        --encoder vits \\
-        --visualize
+    # plus preview PNGs
+    python infer.py ... --visualize
+
+    # height only, no terrain mask
+    python infer.py ... --skip-terrain
 """
 
 import argparse
@@ -56,10 +68,29 @@ def main():
     ap.add_argument("--outdir", default="./height_predictions")
     ap.add_argument("--input-size", type=int, default=518)
     ap.add_argument("--visualize", action="store_true",
-                     help="also save an RGB+height preview PNG per image (off by default)")
+                     help="also save RGB+height and terrain mask preview PNGs (off by default)")
+    ap.add_argument("--skip-terrain", action="store_true",
+                     help="do not run terrain classification, save height arrays only")
+    ap.add_argument("--terrain-dir", default=str(Path(__file__).resolve().parent.parent / "terrain_classifier"),
+                     help="folder containing terrain_classifier.py "
+                          "(default: <repo root>/terrain_classifier)")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     args = ap.parse_args()
     assert args.input_size % 14 == 0, f"--input-size must be a multiple of 14, got {args.input_size}"
+
+    classify_terrain = make_preview = None
+    if not args.skip_terrain:
+        terrain_file = Path(args.terrain_dir) / "terrain_classifier.py"
+        if not terrain_file.exists():
+            raise FileNotFoundError(
+                f"{terrain_file} not found. Pass --terrain-dir pointing at the folder "
+                f"that contains terrain_classifier.py, or use --skip-terrain."
+            )
+        # Put the classifier's own folder FIRST on the path, so that
+        # `terrain_classifier` resolves to terrain_classifier.py and not to
+        # the folder of the same name at the repo root.
+        sys.path.insert(0, str(Path(args.terrain_dir).resolve()))
+        from terrain_classifier import classify_terrain, make_preview  # noqa: E402
 
     os.makedirs(args.outdir, exist_ok=True)
 
@@ -116,6 +147,26 @@ def main():
         h_min, h_max = height_np.min(), height_np.max()
         height_normalized = ((height_np - h_min) / (h_max - h_min + 1e-8)).astype(np.float32)
         np.save(os.path.join(args.outdir, f"{base_name}_height_normalized.npy"), height_normalized)
+
+        # Terrain mask from the project's own classifier, run on the SAME
+        # raw_image at its native resolution (the height array was resized
+        # back to exactly this H,W above), so the two align pixel-for-pixel.
+        # Class IDs pass through unchanged: 0 urban, 1 vegetation,
+        # 2 bare_terrain, 3 water, 4 shadow, 5 unknown_low_confidence.
+        if not args.skip_terrain:
+            terrain_mask = classify_terrain(raw_image)
+
+            # Fail loudly rather than ship a misaligned mask.
+            assert terrain_mask.shape == height_np.shape, (
+                f"terrain_mask shape {terrain_mask.shape} != height shape "
+                f"{height_np.shape} for {filename} - alignment broken."
+            )
+
+            np.save(os.path.join(args.outdir, f"{base_name}_terrain_mask.npy"), terrain_mask)
+
+            if args.visualize:
+                cv2.imwrite(os.path.join(args.outdir, f"{base_name}_terrain_mask_preview.png"),
+                            make_preview(terrain_mask))
 
         if args.visualize:
             vis = (height_np - height_np.min()) / (height_np.max() - height_np.min() + 1e-8)
