@@ -6,7 +6,7 @@ pydantic
 
 torch
 torchvision
-opencv-python
+opencv-python-headless
 numpy
 rasterio
 scipy

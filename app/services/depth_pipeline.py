@@ -53,7 +53,7 @@ MODEL_CONFIGS = {
     "vitl": {"encoder": "vitl", "features": 256, "out_channels": [256, 512, 1024, 1024]},
     "vitg": {"encoder": "vitg", "features": 384, "out_channels": [1536, 1536, 1536, 1536]},
 }
-ENCODER = os.getenv("DEPTH_MODEL_ENCODER", "vitl")
+ENCODER = os.getenv("DEPTH_MODEL_ENCODER", "vits")
 CHECKPOINT_PATH = os.path.join(SIH_ROOT, "checkpoints", f"depth_anything_v2_{ENCODER}.pth")
 DEVICE = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
 
