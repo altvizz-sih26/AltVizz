@@ -1,47 +1,59 @@
+"""
+Confidence map: how much to trust the elevation value at each pixel.
+
+confidence(pixel) = sample_confidence(class) x validation_confidence(class)
+
+- sample_confidence: how many pixels of this class exist in THIS image
+  (counted straight from the terrain mask, so it works in SRTM mode and
+  no-SRTM mode alike - no fit_report needed).
+- validation_confidence: how well this class's height estimate correlated
+  with real ground truth when it was tested. Keyed by the classifier's OWN
+  class names (urban, vegetation, bare_terrain, water, shadow,
+  unknown_low_confidence) - NOT the GAMUS labels.
+
+CLASS_VALIDATED_CORRELATION is empty on purpose: the old numbers were for
+vanilla DA-V2 on GAMUS classes and did not match these names, so they were
+silently replaced by the default anyway. Fill this in only with numbers
+measured for the fine-tuned model, per classifier class.
+"""
 import numpy as np
 
-# From your GAMUS per-class validation (Test 4, terrain-wise polynomial) —
-# update these if you re-run with the recovered 18 samples or a fine-tuned model
 CLASS_VALIDATED_CORRELATION = {
-    "ground": 0.014, "low_vegetation": 0.042, "building": 0.288,
-    "water": 0.445, "road": 0.024, "tree": 0.325,
+    # "urban": 0.00,        # <- fill from held-out, per-classifier-class results
+    # "vegetation": 0.00,
+    # "bare_terrain": 0.00,
+    # "water": 0.00,
+    # "shadow": 0.00,
+    # "unknown_low_confidence": 0.00,
 }
-
-def compute_confidence(terrain_mask, fit_report, class_names, min_pixels=500, max_reliable_pixels=5000):
-    """
-    Per-pixel confidence in [0, 1], combining two independent signals:
-      1. sample_confidence: how many pixels this class's fit was trained on,
-         relative to min_pixels (fallback threshold) and max_reliable_pixels
-         (where more data stops meaningfully helping).
-      2. validation_confidence: this class's actual measured correlation
-         against real GAMUS ground truth.
-    Combined as their product — a class needs to be BOTH well-sampled AND
-    historically accurate to score high confidence; weak on either drags it down.
-    """
-    confidence = np.zeros_like(terrain_mask, dtype=np.float32)
-
-    for cls in np.unique(terrain_mask):
-        cls_int = int(cls)
-        _, n_pixels = fit_report[cls_int]
-
-        sample_conf = np.clip((n_pixels - min_pixels) / (max_reliable_pixels - min_pixels), 0.0, 1.0) \
-            if n_pixels >= min_pixels else n_pixels / min_pixels * 0.3
-
-        class_name = class_names.get(cls_int, None)
-        val_conf = CLASS_VALIDATED_CORRELATION.get(class_name, 0.3)  # unknown class → conservative default
-
-        confidence[terrain_mask == cls] = sample_conf * val_conf
-
-    return confidence
+DEFAULT_VALIDATION = 0.3
+_warned = set()
 
 
-if __name__ == "__main__":
-    fake_mask = np.array([[1, 1, 3], [3, 3, 3], [4, 4, 4]])
-    fake_report = {1: ((1, 1), 200), 3: ((1, 1), 6000), 4: ((1, 1), 1403)}
-    names = {1: "ground", 3: "building", 4: "water"}
+def _sample_confidence(n, min_pixels, max_reliable_pixels):
+    if n <= 0:
+        return 0.0
+    if n < min_pixels:
+        return 0.3 * n / min_pixels
+    if n >= max_reliable_pixels:
+        return 1.0
+    return 0.3 + 0.7 * (n - min_pixels) / (max_reliable_pixels - min_pixels)
 
-    conf = compute_confidence(fake_mask, fake_report, names)
-    print("Confidence grid:\n", np.round(conf, 3))
-    print("\nExpected: ground (few pixels, weak class) lowest;")
-    print("building (many pixels, decent class) highest;")
-    print("water (moderate pixels, best-correlation class) noticeably higher than ground despite similar n")
+
+def compute_confidence(terrain_mask, fit_report=None, class_names=None,
+                       min_pixels=500, max_reliable_pixels=5000):
+    """fit_report is accepted for backward compatibility but not used."""
+    conf = np.zeros(terrain_mask.shape, dtype=np.float32)
+    for class_id in np.unique(terrain_mask):
+        in_class = terrain_mask == class_id
+        name = (class_names or {}).get(int(class_id), f"class_{int(class_id)}")
+        validation = CLASS_VALIDATED_CORRELATION.get(name)
+        if validation is None:
+            validation = DEFAULT_VALIDATION
+            if name not in _warned:
+                print(f"[confidence] no validated correlation for class '{name}' "
+                      f"- using placeholder {DEFAULT_VALIDATION}")
+                _warned.add(name)
+        conf[in_class] = _sample_confidence(
+            int(in_class.sum()), min_pixels, max_reliable_pixels) * validation
+    return conf
