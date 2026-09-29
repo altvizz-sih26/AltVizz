@@ -1,6 +1,6 @@
 import { Routes, Route, Link, useNavigate } from 'react-router-dom';
 import { useEffect, useRef, useState } from 'react';
-import Layout from './components/Layout';
+import Layout from './components/Layout.jsx';
 import { DEMO_CONFIG } from './config/demoConfig';
 import { clearDemoJob, downloadResult, getJob, getResults, startProcessing, uploadImage } from './services/pipelineService';
 
@@ -8,8 +8,66 @@ const stages = ['Image Ingestion', 'Depth Estimation', 'Terrain Classification',
 const Arrow = () => <span className="arrow">→</span>;
 
 function Home() {
-  return <Layout><section className="hero"><p className="eyebrow">SATELLITE TERRAIN INTELLIGENCE</p><h1>From satellite imagery<br />to <i>3D terrain.</i></h1><p className="lede">Transform a single optical image into elevation-aware terrain and an interactive 3D model.</p><div className="actions"><Link className="button primary" to="/upload">Start Reconstruction <Arrow /></Link><a className="button secondary" href="#workflow">Explore Workflow</a></div></section><section id="workflow" className="section"><p className="eyebrow">THE RECONSTRUCTION PATH</p><h2>Terrain intelligence, layer by layer.</h2><div className="workflow">{['Satellite Image', 'Depth Estimation', 'Terrain Analysis', 'Elevation Calibration', 'DSM', '3D Terrain'].map((x, i) => <div className="flow" key={x}><div className="flow-num">0{i + 1}</div><span>{x}</span>{i < 5 && <Arrow />}</div>)}</div></section><section className="split section"><div><p className="eyebrow">FROM 2D TO TOPOGRAPHY</p><h2>Seeing height where imagery sees colour.</h2></div><p>DepthWizard brings together monocular depth estimation, terrain-aware calibration and reference elevation data to create a meaningful 3D terrain interpretation—without overstating certainty.</p></section></Layout>;
+  return <Layout>
+    <section className="hero">
+      <p className="eyebrow">SATELLITE TERRAIN INTELLIGENCE</p>
+      <h1>From satellite imagery<br />to <i>3D terrain.</i></h1>
+      <p className="lede">Transform a single optical image into elevation-aware terrain and an interactive 3D model.</p>
+      <div className="actions">
+        <Link className="button primary" to="/upload">Start Reconstruction <Arrow /></Link>
+        <a className="button secondary" href="#workflow">Explore Workflow</a>
+      </div>
+    </section>
+
+    <section id="workflow" className="section">
+      <p className="eyebrow">THE RECONSTRUCTION PATH</p>
+      <h2>Terrain intelligence, layer by layer.</h2>
+      {/* CHANGED: workflow steps now sit inside a card instead of loose on the background */}
+      <div className="workflow-card">
+        <div className="workflow">
+          {['Satellite Image', 'Depth Estimation', 'Terrain Analysis', 'Elevation Calibration', 'DSM', '3D Terrain'].map((x, i) =>
+            <div className="flow" key={x}>
+              <div className="flow-num">0{i + 1}</div>
+              <span>{x}</span>
+              {i < 5 && <Arrow />}
+            </div>
+          )}
+        </div>
+      </div>
+    </section>
+
+    {/* NEW: choose-your-path cards */}
+    <section className="section">
+      <p className="eyebrow">CHOOSE YOUR PATH</p>
+      <h2>Two ways to reconstruct terrain.</h2>
+      <div className="mode-grid">
+        <Link className="mode-card" to="/upload">
+          <span className="mode-icon">◭</span>
+          <p className="eyebrow">FULL PIPELINE</p>
+          <h3>Terrain Analysis Suite</h3>
+          <p>Upload a single image, run depth estimation, calibrate with SRTM reference elevation, and inspect the DSM and 3D mesh.</p>
+          <b>Start analysis <Arrow /></b>
+        </Link>
+        <Link className="mode-card" to="/compare">
+  <span className="mode-icon">◒</span>
+  <p className="eyebrow">COMPARATIVE ANALYSIS</p>
+  <h3>Before / After Terrain Compare</h3>
+  <p>Upload two images of the same site and compare elevation, DSM and 3D terrain side by side over time.</p>
+  <b>Start comparison <Arrow /></b>
+</Link>
+      </div>
+    </section>
+
+    <section className="split section">
+      <div>
+        <p className="eyebrow">FROM 2D TO TOPOGRAPHY</p>
+        <h2>Seeing height where imagery sees colour.</h2>
+      </div>
+      <p>DepthWizard brings together monocular depth estimation, terrain-aware calibration and reference elevation data to create a meaningful 3D terrain interpretation—without overstating certainty.</p>
+    </section>
+  </Layout>;
 }
+
 
 function Upload() {
   const nav = useNavigate();
@@ -47,6 +105,99 @@ function Upload() {
   };
 
   return <Layout><section className="page narrow"><p className="eyebrow">STEP 01 / INPUT</p><h1>Upload satellite imagery.</h1><p className="lede">Upload a single optical satellite or remote-sensing image to begin the demo reconstruction.</p><label className={'dropzone ' + (drag ? 'dragging' : '')} onDragOver={e => { e.preventDefault(); setDrag(true) }} onDragLeave={() => setDrag(false)} onDrop={e => { e.preventDefault(); setDrag(false); pick(e.dataTransfer.files[0]) }}><input type="file" accept=".png,.jpg,.jpeg,.tiff,.tif" onChange={e => pick(e.target.files[0])} /><div className="upload-icon">⇧</div><b>Drop your image here</b><span>or <u>browse files</u></span><small>PNG, JPG, JPEG, TIFF or TIF · one image only</small></label>{error && <p className="error">{error}</p>}{file && <div className="file-card">{file.type.startsWith('image/') && !/tiff/i.test(file.name) && <img src={URL.createObjectURL(file)} alt="Selected satellite preview" />}<div><p className="eyebrow">SELECTED INPUT</p><b>{file.name}</b><small>{file.type || 'Image file'} · {(file.size / 1024 / 1024).toFixed(2)} MB</small>{/tiff/i.test(file.name) && <small>TIFF selected — browser preview unavailable; it will be preserved for processing.</small>}</div><button onClick={() => setFile(null)} className="text-button">Remove</button></div>}<div className="actions right"><button disabled={!file || uploading} onClick={go} className="button primary">{uploading ? 'Uploading…' : <>Start Processing <Arrow /></>}</button></div></section></Layout>;
+}
+
+function CompareUpload() {
+  const nav = useNavigate();
+  const [before, setBefore] = useState(null);
+  const [after, setAfter] = useState(null);
+  const [error, setError] = useState('');
+  const [dragBefore, setDragBefore] = useState(false);
+  const [dragAfter, setDragAfter] = useState(false);
+  const [uploading, setUploading] = useState(false);
+
+  const pick = (f, which) => {
+    if (!f) return;
+    const ext = f.name.split('.').pop().toLowerCase();
+    if (!DEMO_CONFIG.acceptedExtensions.includes(ext)) {
+      setError('Please select a PNG, JPG, JPEG, TIFF, or TIF image.');
+      return;
+    }
+    setError('');
+    which === 'before' ? setBefore(f) : setAfter(f);
+  };
+
+  // NOTE: real before/after pipeline isn't wired up yet — this just
+  // simulates a short "processing" beat, then opens the real 3D viewer.
+  // Swap this for an actual upload+process call once the backend
+  // supports two-image comparison.
+  const go = async () => {
+    setUploading(true);
+    setError('');
+    setTimeout(() => {
+      window.location.href = '/viewer.html';
+    }, 600);
+  };
+
+  const dropzone = (label, file, which, dragging, setDragging) => (
+    <label
+      className={'dropzone ' + (dragging ? 'dragging' : '')}
+      onDragOver={e => { e.preventDefault(); setDragging(true); }}
+      onDragLeave={() => setDragging(false)}
+      onDrop={e => { e.preventDefault(); setDragging(false); pick(e.dataTransfer.files[0], which); }}
+    >
+      <input type="file" accept=".png,.jpg,.jpeg,.tiff,.tif" onChange={e => pick(e.target.files[0], which)} />
+      <div className="upload-icon">⇧</div>
+      <b>{label}</b>
+      <span>or <u>browse files</u></span>
+      <small>PNG, JPG, JPEG, TIFF or TIF</small>
+    </label>
+  );
+
+  const fileCard = (file, which, setFile) => file && (
+    <div className="file-card">
+      {file.type.startsWith('image/') && !/tiff/i.test(file.name) &&
+        <img src={URL.createObjectURL(file)} alt={which + ' preview'} />}
+      <div>
+        <p className="eyebrow">{which.toUpperCase()} IMAGE</p>
+        <b>{file.name}</b>
+        <small>{file.type || 'Image file'} · {(file.size / 1024 / 1024).toFixed(2)} MB</small>
+      </div>
+      <button onClick={() => setFile(null)} className="text-button">Remove</button>
+    </div>
+  );
+
+    return (
+    <Layout>
+      <section className="page narrow">
+        <p className="eyebrow">STEP 01 / INPUT</p>
+        <h1>Upload before &amp; after imagery.</h1>
+        <p className="lede">Upload two satellite images of the same site to compare elevation, DSM and terrain change over time.</p>
+
+        {/* CHANGED: before/after dropzones now sit side by side in a grid */}
+        <div className="compare-grid">
+          <div>
+            <p className="eyebrow">BEFORE</p>
+            {dropzone('Drop the "before" image here', before, 'before', dragBefore, setDragBefore)}
+            {fileCard(before, 'before', setBefore)}
+          </div>
+          <div>
+            <p className="eyebrow">AFTER</p>
+            {dropzone('Drop the "after" image here', after, 'after', dragAfter, setDragAfter)}
+            {fileCard(after, 'after', setAfter)}
+          </div>
+        </div>
+
+        {error && <p className="error">{error}</p>}
+
+        <div className="actions right">
+          <button disabled={!before || !after || uploading} onClick={go} className="button primary">
+            {uploading ? 'Processing…' : <>Start Comparison <Arrow /></>}
+          </button>
+        </div>
+      </section>
+    </Layout>
+  );
 }
 
 function Processing() {
@@ -228,5 +379,5 @@ function Viewer() {
 }
 
 export default function App() {
-  return <Routes><Route path="/" element={<Home />} /><Route path="/upload" element={<Upload />} /><Route path="/processing" element={<Processing />} /><Route path="/results" element={<Results />} /><Route path="/viewer" element={<Viewer />} /><Route path="*" element={<Home />} /></Routes>;
+  return <Routes><Route path="/" element={<Home />} /><Route path="/upload" element={<Upload />} /><Route path="/compare" element={<CompareUpload />} /><Route path="/processing" element={<Processing />} /><Route path="/results" element={<Results />} /><Route path="/viewer" element={<Viewer />} /><Route path="*" element={<Home />} /></Routes>;
 }
