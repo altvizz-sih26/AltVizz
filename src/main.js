@@ -1,8 +1,3 @@
-// ============================================================================
-// SASA MINE — 3D TERRAIN VIEWER
-// Person 4 — Three.js / GLB Viewer / Flythrough / Terrain Analysis
-// ============================================================================
-
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
@@ -18,919 +13,718 @@ import "./style.css";
 
 const $ = (id) => document.getElementById(id);
 
+import "./viewer.css";
 
-// ============================================================================
-// CONFIGURATION
-// ============================================================================
+// ===============================================================
+// MODEL REGISTRY
+// ===============================================================
+// These three files were inspected directly (pygltflib + manual
+// bounding-box / attribute analysis). Findings that drove every
+// decision below:
+//
+//  - All three GLBs are authored Z-UP (elevation is stored on Z,
+//    footprint is X/Y). Three.js is Y-up, so every model needs a
+//    -90 deg rotation on X after load, BEFORE we measure it.
+//  - None of the three meshes ship a NORMAL attribute (only
+//    POSITION + TEXCOORD_0), so without an explicit
+//    computeVertexNormals() call the surface lights unevenly or,
+//    depending on renderer defaults, can end up fully unlit/black.
+//  - Materials are alphaMode OPAQUE / doubleSided:false. Combined
+//    with the wrong up-axis this is the main reason the page could
+//    render nothing but the sky-blue clear color: the heightfield
+//    was effectively standing on its edge, back-face culled away
+//    from camera.
+//  - Every mesh is a single-material 512x512 heightfield
+//    (262,144 verts / 522,242 tris) with one baked 512x512 satellite
+//    texture — no cameras, lights, animations or skins inside any
+//    of the files, so nothing needs to be stripped out.
+//
+// Filename -> button mapping:
+//   depthwizard_bare_terrain_3d.glb  -> Bare Terrain (name says so,
+//         and it has the largest elevation range: -42.5..172.1)
+//   depthwizard_urban_3d.glb         -> Terrain (its baked texture
+//         shows open ground + built areas, elevation -10.4..43.9)
+//   urban_depthwizard_3d.glb         -> Vegetation (its baked
+//         texture is dominated by tree canopy, elevation -4.2..18.6,
+//         the flattest/lowest-relief of the three)
+// The "urban" pair can only be told apart by the baked texture
+// content, not the filename, so if these two ever look swapped in
+// the viewer, just swap the two paths below — nothing else needs
+// to change.
+// ===============================================================
 
-// Person 2 grid
-const GRID_ROWS = 1024;
-const GRID_COLS = 1024;
+const params = new URLSearchParams(window.location.search);
+const dynamicGlbUrl = params.get("glb");
+const dynamicLabel = params.get("label") || "Generated Terrain";
 
-// Person 3 currently downsamples:
-// 1024 x 1024 -> grid[::2, ::2] -> 512 x 512 mesh
-const DEFAULT_MESH_ROWS = 512;
-const DEFAULT_MESH_COLS = 512;
-const DEFAULT_GRID_STEP = 2;
+const MODEL_CONFIG = dynamicGlbUrl
+  ? [
+      { key: "dynamic", label: dynamicLabel, url: dynamicGlbUrl, buttonId: "btn-bare" },
+    ]
+  : [
+      { key: "bare", label: "Bare Terrain", url: "/depthwizard_bare_terrain_3d.glb", buttonId: "btn-bare" },
+      { key: "terrain", label: "Terrain", url: "/depthwizard_urban_3d.glb", buttonId: "btn-terrain" },
+      { key: "vegetation", label: "Vegetation", url: "/urban_depthwizard_3d.glb", buttonId: "btn-vegetation" },
+    ];
 
-// Person 3 generated terrain is already Z-up.
-// X/Y are the ground plane and Z is elevation.
-// Do NOT rotate the GLB. The camera/controls are configured for Z-up.
+// ===============================================================
+// DYNAMIC MODE UI ADJUSTMENTS
+// ===============================================================
+// When a real backend result is loaded via ?glb=&label=, the page only
+// ever shows ONE model — so the static 3-layer HTML (button text,
+// loading copy, "Layers" group label) needs to reflect that instead of
+// leftover demo copy ("Bare Terrain", "Reading bare terrain, terrain
+// and vegetation meshes", etc.), which would otherwise be misleading
+// for a user looking at their own reconstruction.
+if (dynamicGlbUrl) {
+  // Remove the two demo-only layer buttons; #btn-bare is repurposed
+  // below as the single "current model" button instead of removing it.
+  document.getElementById("btn-terrain")?.remove();
+  document.getElementById("btn-vegetation")?.remove();
+
+  // Relabel the remaining layer button with the real model's label
+  // instead of leaving the hardcoded "Bare Terrain" text in place.
+  const dynamicBtn = document.getElementById("btn-bare");
+  if (dynamicBtn) {
+    const textEl = dynamicBtn.querySelector(".ctrl-text");
+    if (textEl) textEl.textContent = dynamicLabel;
+
+    const iconEl = dynamicBtn.querySelector(".ctrl-icon");
+    if (iconEl) iconEl.textContent = "📍";
+  }
+
+  // "Layers" no longer makes sense when there's only one model to show.
+  const layersGroup = document.querySelector('.control-group[aria-label="Model layers"]');
+  if (layersGroup) {
+    const groupLabel = layersGroup.querySelector(".control-group-label");
+    if (groupLabel) groupLabel.textContent = "Model";
+  }
+
+  // Loading overlay copy assumed the 3 static demo files; rewrite it to
+  // describe loading a single generated result instead.
+  const loadingTitleEl = document.querySelector(".loading-title");
+  if (loadingTitleEl) loadingTitleEl.textContent = "Preparing your reconstruction";
+
+  const loadingNoteEl = document.querySelector(".loading-note");
+  if (loadingNoteEl) loadingNoteEl.textContent = `Loading ${dynamicLabel}`;
+}
+
+// Every one of these GLBs was authored Z-up. If a future model
+// export is already Y-up, set its `upAxis` to "y" instead and it
+// will be skipped during the correction rotation.
 const SOURCE_UP_AXIS = "z";
 
-// Keep null until backend gives you a real endpoint.
-const BACKEND_ENDPOINT = null;
-
-const IMAGE_FIELD_NAME = "image";
-const RESPONSE_GLB_URL_FIELD = "glbUrl";
-
-const FLY_DURATION = 24;
-
-const LIGHT_BASE = {
-  ambient: 1.15,
-  hemisphere: 1.3,
-  sun: 2.4,
-};
-
-const LIGHT_HILLSHADE = {
-  ambient: 0.55,
-  hemisphere: 0.7,
-  sun: 3.4,
-};
-
-
-// ============================================================================
-// DOM — TOP BAR
-// ============================================================================
-
-const systemStatusIndicatorEl = $("system-status-indicator");
-const systemStatusValueEl = $("system-status-value");
-
-const telemetryModelValueEl = $("telemetry-model-value");
-const telemetryStatusValueEl = $("telemetry-status-value");
-
-const tabEls = Array.from(document.querySelectorAll(".tab"));
-
-
-// ============================================================================
-// DOM — LEFT SIDEBAR
-// ============================================================================
-
-const navItemEls = Array.from(document.querySelectorAll(".nav-item"));
-
-const statusIndicatorModelEl = $("status-indicator-model");
-const statusValueModelEl = $("status-value-model");
-
-const statusIndicatorGridEl = $("status-indicator-grid");
-const statusValueGridEl = $("status-value-grid");
-
-const statusIndicatorRenderEl = $("status-indicator-render");
-const statusValueRenderEl = $("status-value-render");
-
-const statusIndicatorCameraEl = $("status-indicator-camera");
-const statusValueCameraEl = $("status-value-camera");
-
-
-// ============================================================================
-// DOM — VIEWER
-// ============================================================================
-
-const viewerEl = $("viewer") || document.body;
-
-const viewportAzimuthEl = $("viewport-azimuth");
-const viewportPitchEl = $("viewport-pitch");
-const viewportCursorAltEl = $("viewport-cursor-alt");
-
-const viewportGeorefEl = $("viewport-georef");
-const viewportGridEl = $("viewport-grid");
-const viewportMeshEl = $("viewport-mesh");
-
-
-// ============================================================================
-// DOM — TOOLBAR
-// ============================================================================
-
-const btnAutoRotate = $("btn-auto-rotate");
-const btnToolbarWireframe = $("btn-toolbar-wireframe");
-const btnToolbarHillshade = $("btn-toolbar-hillshade");
-const btnToolbarSlopeHeatmap = $("btn-toolbar-slope-heatmap");
-
-
-// ============================================================================
-// DOM — CAMERA PRESETS
-// ============================================================================
-
-const btnCameraTop = $("btn-camera-top");
-const btnCameraIso = $("btn-camera-iso");
-const btnCameraProfile = $("btn-camera-profile");
-const btnCameraResetPreset = $("btn-camera-reset");
-
-
-// ============================================================================
-// DOM — FLYTHROUGH
-// ============================================================================
-
-const btnFlythroughStart = $("btn-flythrough-start");
-const btnFlythroughStop = $("btn-flythrough-stop");
-
-
-// ============================================================================
-// DOM — BEFORE / AFTER COMPARISON
-// ============================================================================
-
-const comparisonDockEl = $("comparison-dock");
-const comparisonSliderEl = $("comparison-slider");
-const comparisonValueEl = $("comparison-value");
-
-
-// ============================================================================
-// DOM — RIGHT SIDEBAR
-// ============================================================================
-
-const elevationPeakEl = $("elevation-peak");
-const elevationBaseEl = $("elevation-base");
-const elevationReliefEl = $("elevation-relief");
-
-const elevationChartEl = $("elevation-profile-chart");
-const elevationLegendMinEl = $("elevation-legend-min");
-const elevationLegendMidEl = $("elevation-legend-mid");
-const elevationLegendMaxEl = $("elevation-legend-max");
-
-const metadataDatasetEl = $("metadata-dataset");
-const metadataElevationRangeEl = $("metadata-elevation-range");
-const metadataResolutionEl = $("metadata-resolution");
-const metadataGridEl = $("metadata-grid");
-const metadataMeshEl = $("metadata-mesh");
-const metadataCoordinatesEl = $("metadata-coordinates");
-const metadataDatumEl = $("metadata-datum");
-const metadataCalibrationEl = $("metadata-calibration");
-
-
-// ============================================================================
-// DOM — LIGHTING
-// ============================================================================
-
-const solarAzimuthEl = $("solar-azimuth");
-const solarAzimuthValueEl = $("solar-azimuth-value");
-
-const solarElevationEl = $("solar-elevation");
-const solarElevationValueEl = $("solar-elevation-value");
-
-const zExaggerationEl = $("z-exaggeration");
-const zExaggerationValueEl = $("z-exaggeration-value");
-
-
-// ============================================================================
-// DOM — SHADING
-// ============================================================================
-
-const btnHillshade = $("btn-hillshade");
-const btnWireframe = $("btn-wireframe");
-const btnSlopeHeatmap = $("btn-slope-heatmap");
-const btnTerrainTexture = $("btn-terrain-texture");
-const btnElevationColor = $("btn-elevation-color");
-
-
-// ============================================================================
-// DOM — INSPECTION
-// ============================================================================
-
-const inspectionPanelEl = $("terrain-inspection-panel");
-
-const inspectionRowEl = $("inspection-row");
-const inspectionColEl = $("inspection-col");
-
-const inspectionElevationEl = $("inspection-elevation");
-const inspectionSlopeEl = $("inspection-slope");
-const inspectionTerrainTypeEl = $("inspection-terrain-type");
-const inspectionConfidenceEl = $("inspection-confidence");
-const inspectionChangeEl = $("inspection-change");
-const inspectionBeforeEl = $("inspection-before");
-const inspectionDuringEl = $("inspection-during");
-
-
-// ============================================================================
-// DOM — ANALYSIS MAP (2D top-down elevation raster + region select)
-// ============================================================================
-
-const analysisMapCardEl = $("analysis-map-card");
-const analysisMapEl = $("analysis-map");
-const analysisMapCanvasEl = $("analysis-map-canvas");
-const analysisMapMarkerEl = $("analysis-map-marker");
-const analysisMapSelectionEl = $("analysis-map-selection");
-
-const regionPanelEl = $("region-analysis-panel");
-const regionCountEl = $("region-count");
-const regionAvgChangeEl = $("region-avg-change");
-const regionMinMaxChangeEl = $("region-minmax-change");
-const regionAvgElevationEl = $("region-avg-elevation");
-const regionSignificantCountEl = $("region-significant-count");
-
-
-// ============================================================================
-// DOM — BOTTOM COMMAND BAR
-// ============================================================================
-
-const btnUploadImage = $("btn-upload-image");
-const inputImage = $("input-image");
-
-const btnLoadGlb = $("btn-load-glb");
-const inputGlb = $("input-glb");
-
-const btnLoadGrid = $("btn-load-grid");
-const inputGrid = $("input-grid");
-
-const btnManualNavigation = $("btn-manual-navigation");
-const btnCameraResetBottom = $("btn-camera-reset-bottom");
-
-
-// ============================================================================
-// DOM — LOADING
-// ============================================================================
-
-const loadingOverlayEl = $("loading-overlay");
-const loadingTitleEl = $("loading-title");
-const loadingMessageEl = $("loading-message");
-const loadingProgressEl = $("loading-progress");
-
-
-// ============================================================================
-// DOM — SYSTEM MESSAGE
-// ============================================================================
-
-const systemMessageEl = $("system-message");
-const systemMessageTextEl = $("system-message-text");
-
-
-// ============================================================================
-// TERRAIN MARKER
-// ============================================================================
-
-const terrainMarkerEl = $("terrain-marker");
-
-
-// ============================================================================
-// STATE
-// IMPORTANT: STATE IS CREATED BEFORE applySolarPosition()
-// This fixes the previous "Cannot access activeModel before initialization"
-// error.
-// ============================================================================
-
-let activeModel = null;
-
-let terrainData = null;
-let gridLoaded = false;
-
-let slopeRange = null;
-
-let flying = false;
-let flyPath = null;
-const flyClock = new THREE.Clock(false);
-
-let autoRotateOn = false;
-let wireframeOn = false;
-let hillshadeOn = false;
-let slopeHeatmapOn = false;
-let elevationColorOn = false;
-
-let markerWorldPoint = null;
-
-let solarAzimuthDeg = solarAzimuthEl
-  ? Number(solarAzimuthEl.value)
-  : 315;
-
-let solarElevationDeg = solarElevationEl
-  ? Number(solarElevationEl.value)
-  : 42;
-
-let zExaggeration = zExaggerationEl
-  ? Number(zExaggerationEl.value)
-  : 1.0;
-
-let systemMessageHideTimer = null;
-
-// ------------------------------------------------------------------
-// BEFORE / AFTER COMPARISON STATE
-//
-// comparisonEntries: one entry per mesh in the After model that has a
-// matching same-vertex-count mesh in the Before model (matched by
-// traversal order, since GLB scenes from the same pipeline export
-// meshes in a stable order). Each entry stores untouched copies of
-// both position buffers so the live geometry attribute can be
-// re-derived from scratch on every slider move, instead of drifting
-// from repeated lerp-into-itself rounding.
-// ------------------------------------------------------------------
-
-let comparisonEntries = [];
-let comparisonReady = false;
-let comparisonT = 1; // 0 = Before, 1 = After — matches slider default (100 = After)
-let comparisonUpdatePending = false;
-
-
-// ============================================================================
+// ===============================================================
 // SCENE
-// ============================================================================
+// ===============================================================
 
 const scene = new THREE.Scene();
+// A slightly lighter sky than pure "sky blue" keeps the terrain reading
+// with good contrast against the background without the background
+// itself glaring or washing out at the horizon.
+const SKY_COLOR = 0x9fd9f2;
+scene.background = new THREE.Color(SKY_COLOR);
+scene.fog = new THREE.Fog(SKY_COLOR, 1, 8000);
 
-
-// ============================================================================
+// ===============================================================
 // CAMERA
-// ============================================================================
+// ===============================================================
 
 const camera = new THREE.PerspectiveCamera(
-  50,
+  55,
   window.innerWidth / window.innerHeight,
   0.1,
-  30000
+  10000
 );
 
-camera.up.set(0, 0, 1);
-camera.position.set(500, 400, 500);
+camera.position.set(600, 500, 600);
 
-
-// ============================================================================
+// ===============================================================
 // RENDERER
-// ============================================================================
+// ===============================================================
+
+const canvasContainer = document.getElementById("viewer");
 
 const renderer = new THREE.WebGLRenderer({
   antialias: true,
-  alpha: false,
   powerPreference: "high-performance",
 });
 
-renderer.setPixelRatio(
-  Math.min(window.devicePixelRatio || 1, 2)
-);
-
-renderer.setSize(
-  window.innerWidth,
-  window.innerHeight
-);
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 
 renderer.outputColorSpace = THREE.SRGBColorSpace;
-
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.35;
+// A touch brighter than a "neutral" 1.0, but ACES rolls off highlights
+// naturally so this brightens midtones/shadows without blowing out
+// the bright parts of the baked satellite textures.
+renderer.toneMappingExposure = 1.2;
 
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
-renderer.domElement.style.width = "100%";
-renderer.domElement.style.height = "100%";
-renderer.domElement.style.display = "block";
+(canvasContainer || document.body).appendChild(renderer.domElement);
 
-viewerEl.appendChild(renderer.domElement);
+// ===============================================================
+// CONTROLS
+// ===============================================================
 
-
-// ============================================================================
-// BACKGROUND
-// ============================================================================
-
-function createBackground() {
-
-  const canvas = document.createElement("canvas");
-
-  canvas.width = 1024;
-  canvas.height = 1024;
-
-  const ctx = canvas.getContext("2d");
-
-  const gradient = ctx.createRadialGradient(
-    512,
-    350,
-    20,
-    512,
-    512,
-    800
-  );
-
-  gradient.addColorStop(0, "#101c28");
-  gradient.addColorStop(0.35, "#08121c");
-  gradient.addColorStop(0.7, "#03070d");
-  gradient.addColorStop(1, "#010204");
-
-  ctx.fillStyle = gradient;
-  ctx.fillRect(0, 0, 1024, 1024);
-
-  const texture = new THREE.CanvasTexture(canvas);
-
-  texture.colorSpace = THREE.SRGBColorSpace;
-
-  scene.background = texture;
-
-
-  // ------------------------------------------------------------
-  // Stars
-  // ------------------------------------------------------------
-
-  function createStars(
-    count,
-    radius,
-    size,
-    opacity
-  ) {
-
-    const positions = new Float32Array(
-      count * 3
-    );
-
-    for (let i = 0; i < count; i++) {
-
-      const r =
-        radius *
-        (0.65 + Math.random() * 0.35);
-
-      const theta =
-        Math.random() *
-        Math.PI *
-        2;
-
-      const phi =
-        Math.acos(
-          2 * Math.random() - 1
-        );
-
-      positions[i * 3] =
-        r *
-        Math.sin(phi) *
-        Math.cos(theta);
-
-      positions[i * 3 + 1] =
-        r *
-        Math.cos(phi);
-
-      positions[i * 3 + 2] =
-        r *
-        Math.sin(phi) *
-        Math.sin(theta);
-    }
-
-    const geometry =
-      new THREE.BufferGeometry();
-
-    geometry.setAttribute(
-      "position",
-      new THREE.BufferAttribute(
-        positions,
-        3
-      )
-    );
-
-    const material =
-      new THREE.PointsMaterial({
-        color: 0xffffff,
-        size,
-        transparent: true,
-        opacity,
-        depthWrite: false,
-        fog: false,
-        sizeAttenuation: true,
-      });
-
-    const points =
-      new THREE.Points(
-        geometry,
-        material
-      );
-
-    scene.add(points);
-  }
-
-  createStars(
-    1400,
-    5000,
-    2,
-    0.5
-  );
-
-  createStars(
-    400,
-    3200,
-    3.5,
-    0.3
-  );
-}
-
-createBackground();
-
-
-// ============================================================================
-// FOG
-// ============================================================================
-
-scene.fog = new THREE.Fog(
-  0x03070d,
-  1800,
-  10000
-);
-
-
-// ============================================================================
-// LIGHTING
-// ============================================================================
-
-const ambient =
-  new THREE.AmbientLight(
-    0xffffff,
-    LIGHT_BASE.ambient
-  );
-
-scene.add(ambient);
-
-
-const hemisphere =
-  new THREE.HemisphereLight(
-    0xeaf4ff,
-    0x756650,
-    LIGHT_BASE.hemisphere
-  );
-
-scene.add(hemisphere);
-
-
-const sun =
-  new THREE.DirectionalLight(
-    0xfff2d9,
-    LIGHT_BASE.sun
-  );
-
-sun.castShadow = true;
-
-sun.shadow.mapSize.set(
-  2048,
-  2048
-);
-
-sun.shadow.camera.left = -1000;
-sun.shadow.camera.right = 1000;
-sun.shadow.camera.top = 1000;
-sun.shadow.camera.bottom = -1000;
-
-sun.shadow.camera.near = 10;
-sun.shadow.camera.far = 5000;
-
-sun.shadow.bias = -0.0003;
-
-scene.add(sun);
-scene.add(sun.target);
-
-
-const fill =
-  new THREE.DirectionalLight(
-    0xdcecff,
-    0.8
-  );
-
-scene.add(fill);
-scene.add(fill.target);
-
-
-// ============================================================================
-// SOLAR POSITION
-// ============================================================================
-
-const SUN_DISTANCE = 1400;
-
-function applySolarPosition() {
-
-  const az =
-    THREE.MathUtils.degToRad(
-      solarAzimuthDeg
-    );
-
-  const el =
-    THREE.MathUtils.degToRad(
-      solarElevationDeg
-    );
-
-  const horizontal =
-    Math.cos(el) *
-    SUN_DISTANCE;
-
-  const center =
-    activeModel?.center ||
-    new THREE.Vector3(
-      0,
-      0,
-      0
-    );
-
-  // Z is the vertical/elevation axis.
-  // Azimuth moves around the X/Y ground plane.
-  sun.position.set(
-    center.x + Math.cos(az) * horizontal,
-    center.y + Math.sin(az) * horizontal,
-    center.z + Math.sin(el) * SUN_DISTANCE
-  );
-
-  sun.target.position.copy(center);
-
-  sun.target.updateMatrixWorld();
-}
-
-
-// ============================================================================
-// NOW IT IS SAFE TO CALL
-// ============================================================================
-
-applySolarPosition();
-
-
-// ============================================================================
-// ORBIT CONTROLS
-// ============================================================================
-
-const controls =
-  new OrbitControls(
-    camera,
-    renderer.domElement
-  );
+const controls = new OrbitControls(camera, renderer.domElement);
 
 controls.enableDamping = true;
 controls.dampingFactor = 0.06;
-
-controls.enablePan = true;
-
-controls.screenSpacePanning = false;
+controls.screenSpacePanning = true; // Google Maps jaisa flat pan
 
 controls.mouseButtons = {
-  LEFT: THREE.MOUSE.ROTATE,
-  MIDDLE: THREE.MOUSE.DOLLY,
-  RIGHT: THREE.MOUSE.PAN,
+  LEFT: THREE.MOUSE.PAN,     // left-drag = pan (left/right/up/down)
+  MIDDLE: THREE.MOUSE.DOLLY, // scroll = zoom
+  RIGHT: THREE.MOUSE.ROTATE, // right-drag = rotate/tilt
 };
 
-controls.minDistance = 2;
-controls.maxDistance = 15000;
+controls.touches = {
+  ONE: THREE.TOUCH.PAN,
+  TWO: THREE.TOUCH.DOLLY_ROTATE, // 2-finger = zoom+rotate (mobile)
+};
 
-controls.maxPolarAngle =
-  Math.PI * 0.495;
+controls.panSpeed = 1.2;
+controls.rotateSpeed = 0.8;
 
-controls.autoRotateSpeed = 1.1;
+controls.minDistance = 5;
+controls.maxDistance = 5000;
+controls.maxPolarAngle = Math.PI * 0.495; // stop just short of going underground
 
+// ===============================================================
+// LIGHTS
+// ===============================================================
+// Four-light "studio" rig instead of a single strong key light:
+//   1. Ambient       - flat base brightness, lifts pure-black shadow
+//                       cores so nothing on the terrain is ever unreadable.
+//   2. Hemisphere    - sky/ground tint so slopes facing up vs. down
+//                       aren't lit identically (keeps it looking natural,
+//                       not flat).
+//   3. Key (sun)      - the only shadow-casting light; toned down from
+//                       before so cast shadows are soft, not black pits.
+//   4. Fill           - dim, opposite side, no shadows. Its whole job is
+//                       to knock the darkness out of the side of the
+//                       terrain facing away from the key light.
+// Total intensity is balanced so it reads as "bright and clear" without
+// any single light being strong enough to overexpose the texture.
 
-// ============================================================================
+const ambientLight = new THREE.AmbientLight(0xffffff, 1.15);
+scene.add(ambientLight);
+
+const hemisphereLight = new THREE.HemisphereLight(0xeaf4ff, 0x8a7a63, 1.35);
+scene.add(hemisphereLight);
+
+const directionalLight = new THREE.DirectionalLight(0xfff6e6, 1.7);
+directionalLight.position.set(500, 900, 350);
+directionalLight.castShadow = true;
+
+// Softer penumbra so shadow edges aren't a hard, dark line (works with
+// PCFSoftShadowMap). Bias tuned to avoid both shadow acne and peter-panning
+// on this heightfield's triangle density.
+directionalLight.shadow.radius = 6;
+directionalLight.shadow.blurSamples = 16;
+
+// All three files share the same ~511x511 footprint, so a single
+// generous, fixed shadow frustum comfortably covers every model.
+const SHADOW_FRUSTUM = 420;
+directionalLight.shadow.mapSize.set(2048, 2048);
+directionalLight.shadow.camera.left = -SHADOW_FRUSTUM;
+directionalLight.shadow.camera.right = SHADOW_FRUSTUM;
+directionalLight.shadow.camera.top = SHADOW_FRUSTUM;
+directionalLight.shadow.camera.bottom = -SHADOW_FRUSTUM;
+directionalLight.shadow.camera.near = 10;
+directionalLight.shadow.camera.far = 3000;
+directionalLight.shadow.bias = -0.0004;
+
+scene.add(directionalLight);
+scene.add(directionalLight.target);
+
+// Fill light: comes from roughly the opposite side of the key light,
+// casts no shadows, and is deliberately dim. This is what removes the
+// "very dark side" of the terrain without flattening the shading from
+// the key light or casting a second set of shadows.
+const fillLight = new THREE.DirectionalLight(0xdcebff, 0.6);
+fillLight.position.set(-450, 500, -380);
+fillLight.castShadow = false;
+scene.add(fillLight);
+scene.add(fillLight.target);
+
+// ===============================================================
 // GLTF LOADER
-// ============================================================================
+// ===============================================================
 
-const loader =
-  new GLTFLoader();
+const loader = new GLTFLoader();
 
+// key -> { root, size: Vector3, center: Vector3 }
+const models = {};
+let currentKey = null;
 
+// ===============================================================
+// UI ELEMENTS
+// ===============================================================
 
+const statusEl = document.getElementById("status-text");
+const overlayEl = document.getElementById("loading-overlay");
 
-// ============================================================================
-// STATUS FUNCTIONS
-// ============================================================================
+function setStatus(text) {
+  if (statusEl) statusEl.textContent = text;
+  console.log("[STATUS]", text);
+}
 
-function showSystemMessage(
-  text,
-  isError = false
-) {
+function setButtonState(key, state) {
+  const cfg = MODEL_CONFIG.find((c) => c.key === key);
+  if (!cfg) return;
+  const btn = document.getElementById(cfg.buttonId);
+  if (!btn) return;
 
-  if (
-    !systemMessageEl ||
-    !systemMessageTextEl
-  ) {
+  btn.classList.remove("is-loading", "is-ready", "is-error", "is-active");
+
+  if (state === "loading") {
+    btn.classList.add("is-loading");
+    btn.disabled = true;
+  } else if (state === "ready") {
+    btn.classList.add("is-ready");
+    btn.disabled = false;
+  } else if (state === "error") {
+    btn.classList.add("is-error");
+    btn.disabled = true;
+    btn.title = "This model failed to load — see console for details";
+  }
+
+  if (currentKey === key && state !== "error") {
+    btn.classList.add("is-active");
+  }
+}
+
+function markActiveButton(activeKey) {
+  MODEL_CONFIG.forEach((cfg) => {
+    const btn = document.getElementById(cfg.buttonId);
+    if (!btn) return;
+    btn.classList.toggle("is-active", cfg.key === activeKey);
+  });
+}
+
+// ===============================================================
+// PREPARE MODEL
+// Fixes: axis correction, missing normals, backface culling,
+// texture color space / anisotropy, and finally centers the model
+// horizontally and rests it on the y=0 ground plane.
+// ===============================================================
+
+function prepareModel(root, label) {
+  const maxAniso = renderer.capabilities.getMaxAnisotropy();
+
+  root.traverse((object) => {
+    if (!object.isMesh) return;
+
+    object.castShadow = true;
+    object.receiveShadow = true;
+
+    // These GLBs ship POSITION + TEXCOORD_0 only. Without normals
+    // the surface either shades flat/incorrectly or, on some
+    // material/renderer combinations, doesn't receive directional
+    // light at all. Compute them if missing rather than assuming.
+    const geom = object.geometry;
+    if (geom && !geom.attributes.normal) {
+      geom.computeVertexNormals();
+      console.log(`[${label}] normals were missing — computed them`);
+    }
+
+    const materials = Array.isArray(object.material)
+      ? object.material
+      : [object.material];
+
+    materials.forEach((mat) => {
+      if (!mat) return;
+
+      // Source materials are doubleSided:false. After the axis
+      // correction this is usually fine, but heightfields can still
+      // show gaps at masked/degenerate triangles from the depth
+      // source data, and the flythrough camera can end up briefly
+      // below the surface. DoubleSide is the safe, cheap fix for a
+      // single-material terrain mesh like this.
+      mat.side = THREE.DoubleSide;
+
+      // --- This is the real cause of the "too dark" terrain ---
+      // All three GLBs were exported (by trimesh) with
+      // metallicFactor: 1.0 and a baseColorFactor of [0.4,0.4,0.4,1].
+      // A metalness-1 surface has essentially no diffuse response and
+      // only shows up via specular reflection of an environment map —
+      // which this scene doesn't have — so it reads as dark/flat
+      // regardless of how many lights are added. The 0.4 factor then
+      // multiplies the baked satellite texture down to 40% brightness
+      // on top of that. Neither of these touches the actual texture
+      // pixels or the mesh, so correcting them still fully preserves
+      // the original GLB textures/colors — it just stops suppressing
+      // them.
+      if (mat.isMeshStandardMaterial || mat.metalness !== undefined) {
+        mat.metalness = 0;
+        // Keep roughness close to the authored value (matte satellite
+        // imagery) rather than making it glossy.
+        if (mat.roughness === undefined || mat.roughness > 0.95) {
+          mat.roughness = 0.9;
+        }
+      }
+
+      // Only neutralize a flat, uncolored gray dimming factor (this is
+      // an export-time exposure knob, not deliberate color grading —
+      // r === g === b and well below 1). If a future export ever ships
+      // a genuine tint, this check leaves it alone.
+      if (mat.color) {
+        const { r, g, b } = mat.color;
+        const isFlatGrayDimmer =
+          Math.abs(r - g) < 0.01 && Math.abs(g - b) < 0.01 && r < 0.9;
+        if (isFlatGrayDimmer) {
+          mat.color.setRGB(1, 1, 1);
+        }
+      }
+
+      if (mat.map) {
+        mat.map.colorSpace = THREE.SRGBColorSpace;
+        mat.map.anisotropy = maxAniso;
+        mat.map.needsUpdate = true;
+      }
+
+      mat.needsUpdate = true;
+    });
+  });
+
+  // --- Axis correction (Z-up authored -> Y-up three.js world) ---
+  if (SOURCE_UP_AXIS === "z") {
+    root.rotation.x = -Math.PI / 2;
+  }
+
+  root.updateMatrixWorld(true);
+
+  // --- Measure in world space, after rotation ---
+  const box = new THREE.Box3().setFromObject(root);
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+
+  // --- Center horizontally, rest vertically on the ground (y=0) ---
+  root.position.x -= center.x;
+  root.position.z -= center.z;
+  root.position.y -= box.min.y;
+
+  root.updateMatrixWorld(true);
+
+  // Re-measure once more post-placement so downstream code (camera
+  // framing, flythrough path) works off exact final coordinates.
+  const finalBox = new THREE.Box3().setFromObject(root);
+  const finalSize = finalBox.getSize(new THREE.Vector3());
+  const finalCenter = finalBox.getCenter(new THREE.Vector3());
+
+  console.log(`[${label}] size:`, finalSize, "center:", finalCenter);
+
+  return { size: finalSize, center: finalCenter };
+}
+
+// ===============================================================
+// FRAME CAMERA TO FIT A MODEL'S BOUNDING BOX
+// ===============================================================
+
+function frameModel(entry) {
+  const { size, center } = entry;
+
+  const maxDim = Math.max(size.x, size.y, size.z, 0.001);
+
+  // Fit the model's bounding SPHERE inside the tighter of the
+  // vertical/horizontal FOV. Unlike fitting the box's raw axes,
+  // this stays correct regardless of which diagonal angle the
+  // camera views it from, so the model is guaranteed to be fully
+  // in frame without being needlessly zoomed out.
+  const radius = 0.5 * Math.sqrt(size.x ** 2 + size.y ** 2 + size.z ** 2);
+
+  const fovV = (camera.fov * Math.PI) / 180;
+  const fovH = 2 * Math.atan(Math.tan(fovV / 2) * camera.aspect);
+  const tightestFov = Math.min(fovV, fovH);
+
+  const padding = 1.15;
+  const distance = (radius / Math.sin(tightestFov / 2)) * padding;
+
+  const dir = new THREE.Vector3(1, 0.65, 1).normalize();
+
+  camera.position.copy(center).addScaledVector(dir, distance);
+  camera.near = Math.max(distance / 1000, 0.05);
+  camera.far = distance * 8 + maxDim * 4;
+  camera.updateProjectionMatrix();
+
+  controls.target.copy(center);
+  controls.minDistance = Math.max(maxDim * 0.02, 0.5);
+  controls.maxDistance = distance * 6;
+  controls.update();
+
+  directionalLight.target.position.copy(center);
+  directionalLight.target.updateMatrixWorld();
+
+  fillLight.target.position.copy(center);
+  fillLight.target.updateMatrixWorld();
+}
+
+// ===============================================================
+// SHOW MODEL
+// ===============================================================
+
+function showModel(key) {
+  const entry = models[key];
+
+  if (!entry) {
+    console.error("MODEL NOT LOADED:", key);
+    setStatus(
+      `${labelFor(key)} isn't loaded yet${loadErrors[key] ? " (failed to load)" : ""
+      }.`
+    );
     return;
   }
 
-  systemMessageTextEl.textContent =
-    text;
-
-  systemMessageEl.classList.toggle(
-    "is-error",
-    isError
-  );
-
-  systemMessageEl.classList.add(
-    "is-visible"
-  );
-
-  if (systemMessageHideTimer) {
-    clearTimeout(
-      systemMessageHideTimer
-    );
-  }
-
-  systemMessageHideTimer =
-    setTimeout(() => {
-
-      systemMessageEl.classList.remove(
-        "is-visible"
-      );
-
-    }, isError ? 6000 : 3500);
-}
-
-
-function setSystemStatus(
-  word,
-  isError = false,
-  isBusy = false
-) {
-
-  if (systemStatusIndicatorEl) {
-
-    systemStatusIndicatorEl.classList.toggle(
-      "is-error",
-      isError
-    );
-
-    systemStatusIndicatorEl.classList.toggle(
-      "is-busy",
-      isBusy
-    );
-  }
-
-  if (systemStatusValueEl) {
-    systemStatusValueEl.textContent =
-      word;
-  }
-
-  if (telemetryStatusValueEl) {
-    telemetryStatusValueEl.textContent =
-      word;
-  }
-}
-
-
-function setStatus(
-  text,
-  isError = false
-) {
-
-  showSystemMessage(
-    text,
-    isError
-  );
-
-  setSystemStatus(
-    isError
-      ? "ERROR"
-      : "READY",
-    isError,
-    false
-  );
-
-  if (isError) {
-    console.error(
-      "[SASA MINE]",
-      text
-    );
-  } else {
-    console.log(
-      "[SASA MINE]",
-      text
-    );
-  }
-}
-
-
-function setStatusBusy(text) {
-
-  showSystemMessage(
-    text,
-    false
-  );
-
-  setSystemStatus(
-    "BUSY",
-    false,
-    true
-  );
-
-  console.log(
-    "[SASA MINE]",
-    text
-  );
-}
-
-
-function setRowStatus(
-  indicatorEl,
-  valueEl,
-  value,
-  state
-) {
-
-  if (valueEl) {
-    valueEl.textContent =
-      value;
-  }
-
-  if (indicatorEl) {
-
-    indicatorEl.classList.toggle(
-      "is-busy",
-      state === "busy"
-    );
-
-    indicatorEl.classList.toggle(
-      "is-error",
-      state === "error"
-    );
-  }
-}
-
-
-// ============================================================================
-// LOADING OVERLAY
-// ============================================================================
-
-function showLoading(
-  title = "SASA MINE",
-  message = "Loading terrain model..."
-) {
-
-  if (loadingTitleEl) {
-    loadingTitleEl.textContent =
-      title;
-  }
-
-  if (loadingMessageEl) {
-    loadingMessageEl.textContent =
-      message;
-  }
-
-  if (loadingProgressEl) {
-    loadingProgressEl.textContent =
-      "0%";
-  }
-
-  loadingOverlayEl?.classList.remove(
-    "is-hidden"
-  );
-}
-
-
-function updateLoadingProgress(
-  percent
-) {
-
-  if (loadingProgressEl) {
-
-    loadingProgressEl.textContent =
-      `${Math.round(percent)}%`;
-  }
-}
-
-
-function hideLoading() {
-  const overlay = document.getElementById("loading-overlay");
-
-  if (overlay) {
-    overlay.classList.add("is-hidden");
-    overlay.style.display = "none";
-    overlay.style.visibility = "hidden";
-    overlay.style.opacity = "0";
-    overlay.style.pointerEvents = "none";
-  }
-}
-
-// ============================================================================
-// TABS
-// ============================================================================
-
-tabEls.forEach((tab) => {
-
-  tab.addEventListener(
-    "click",
-    () => {
-
-      tabEls.forEach(
-        (t) =>
-          t.classList.remove(
-            "is-active"
-          )
-      );
-
-      tab.classList.add(
-        "is-active"
-      );
+  MODEL_CONFIG.forEach((cfg) => {
+    if (models[cfg.key]) {
+      models[cfg.key].root.visible = cfg.key === key;
     }
-  );
+  });
 
+  currentKey = key;
+  markActiveButton(key);
+
+  stopFlythrough();
+  frameModel(entry);
+
+  setStatus(`Showing ${labelFor(key)}`);
+  console.log("SHOWING MODEL:", key);
+}
+
+function labelFor(key) {
+  return MODEL_CONFIG.find((c) => c.key === key)?.label ?? key;
+}
+
+// ===============================================================
+// LOAD ALL MODELS
+// ===============================================================
+
+const loadErrors = {};
+let loadedCount = 0;
+
+function loadModel(cfg) {
+  setButtonState(cfg.key, "loading");
+
+  return new Promise((resolve) => {
+    loader.load(
+      cfg.url,
+
+      (gltf) => {
+        const root = gltf.scene;
+        scene.add(root);
+        root.visible = false;
+
+        const measurements = prepareModel(root, cfg.label);
+        models[cfg.key] = { root, ...measurements };
+
+        setButtonState(cfg.key, "ready");
+        console.log(`✅ ${cfg.label} loaded`);
+
+        loadedCount += 1;
+        updateOverlayProgress();
+        resolve();
+      },
+
+      (progress) => {
+        if (progress.total > 0) {
+          const percent = ((progress.loaded / progress.total) * 100).toFixed(
+            0
+          );
+          setStatus(`Loading ${cfg.label}... ${percent}%`);
+        }
+      },
+
+      (error) => {
+        loadErrors[cfg.key] = error;
+        setButtonState(cfg.key, "error");
+        console.error(`❌ ${cfg.label} failed to load:`, error);
+
+        loadedCount += 1;
+        updateOverlayProgress();
+        resolve(); // resolve (not reject) so Promise.all still settles
+      }
+    );
+  });
+}
+
+function updateOverlayProgress() {
+  const total = MODEL_CONFIG.length;
+  if (overlayEl) {
+    const progressEl = overlayEl.querySelector(".loading-progress");
+    if (progressEl) progressEl.textContent = `${loadedCount} / ${total}`;
+  }
+}
+
+async function loadAllModels() {
+  setStatus("Loading models...");
+
+  await Promise.all(MODEL_CONFIG.map(loadModel));
+
+  const failed = MODEL_CONFIG.filter((c) => loadErrors[c.key]);
+  const succeeded = MODEL_CONFIG.filter((c) => !loadErrors[c.key]);
+
+  if (overlayEl) overlayEl.classList.add("is-hidden");
+
+  if (failed.length === 0) {
+    setStatus("Models ready");
+  } else if (succeeded.length === 0) {
+    setStatus("All models failed to load — check the console for details.");
+  } else {
+    setStatus(
+      `Models ready (${failed.length} failed: ${failed
+        .map((c) => c.label)
+        .join(", ")})`
+    );
+  }
+
+  // Auto-show the first model that loaded successfully.
+  const first = succeeded[0];
+  if (first) {
+    showModel(first.key);
+  }
+}
+
+loadAllModels();
+
+// ===============================================================
+// FLYTHROUGH
+// ===============================================================
+
+let flying = false;
+let flyClock = new THREE.Clock(false);
+let flyPath = null;
+const FLYTHROUGH_DURATION = 18; // seconds per full loop
+
+function createFlyPath(entry) {
+  const { size, center } = entry;
+
+  const radius = Math.max(size.x, size.z) * 0.55;
+  const baseHeight = center.y + size.y * 0.65 + Math.max(size.y, 20) * 0.5;
+
+  const points = [];
+  const loops = 8;
+
+  for (let i = 0; i < loops; i += 1) {
+    const angle = (i / loops) * Math.PI * 2;
+    const heightWobble = Math.sin(angle * 2) * size.y * 0.15;
+
+    points.push(
+      new THREE.Vector3(
+        center.x + Math.cos(angle) * radius,
+        baseHeight + heightWobble,
+        center.z + Math.sin(angle) * radius
+      )
+    );
+  }
+
+  const curve = new THREE.CatmullRomCurve3(points, true, "catmullrom", 0.5);
+  return curve;
+}
+
+function startFlythrough() {
+  const entry = models[currentKey];
+
+  if (!entry) {
+    setStatus("Select a model before starting the flythrough.");
+    return;
+  }
+
+  flyPath = createFlyPath(entry);
+  flying = true;
+  flyClock.start();
+  controls.enabled = false;
+
+  setActiveCameraButton("start");
+  setStatus(`Flythrough: ${labelFor(currentKey)}`);
+  console.log("FLYTHROUGH STARTED");
+}
+
+function stopFlythrough() {
+  flying = false;
+  flyClock.stop();
+  controls.enabled = true;
+  setActiveCameraButton("manual");
+}
+
+function updateFlythrough() {
+  if (!flyPath || !models[currentKey]) return;
+
+  const t = (flyClock.getElapsedTime() % FLYTHROUGH_DURATION) / FLYTHROUGH_DURATION;
+
+  const position = flyPath.getPointAt(t);
+  camera.position.copy(position);
+
+  camera.lookAt(models[currentKey].center);
+}
+
+function resetCamera() {
+  flying = false;
+  flyClock.stop();
+  controls.enabled = true;
+  setActiveCameraButton("reset");
+
+  const entry = models[currentKey];
+  if (entry) frameModel(entry);
+}
+
+function setActiveCameraButton(which) {
+  const map = {
+    start: "btn-flythrough-start",
+    manual: "btn-flythrough-stop",
+    reset: "btn-camera-reset",
+  };
+  Object.values(map).forEach((id) => {
+    document.getElementById(id)?.classList.remove("is-active");
+  });
+  const activeId = map[which];
+  if (activeId) document.getElementById(activeId)?.classList.add("is-active");
+}
+
+// ===============================================================
+// ANIMATION LOOP
+// ===============================================================
+
+function animate() {
+  requestAnimationFrame(animate);
+
+  if (flying) {
+    updateFlythrough();
+  } else {
+    controls.update();
+  }
+
+  renderer.render(scene, camera);
+}
+
+animate();
+
+// ===============================================================
+// RESIZE
+// ===============================================================
+
+window.addEventListener("resize", () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
+// ===============================================================
+// WIRE UP UI
+// ===============================================================
 
-// ============================================================================
-// NAVIGATION ITEMS
-// ============================================================================
+MODEL_CONFIG.forEach((cfg) => {
+  document.getElementById(cfg.buttonId)?.addEventListener("click", () => {
+    showModel(cfg.key);
+  });
+});
 
-navItemEls.forEach(
-  (item) => {
-
-    item.addEventListener(
-      "click",
-      () => {
-
-        navItemEls.forEach(
-          (i) => {
-
-            i.classList.remove(
-              "is-active"
-            );
+document
+  .getElementById("btn-flythrough-start")
+  ?.addEventListener("click", startFlythrough);
 
             i.removeAttribute(
               "aria-current"
@@ -6532,8 +6326,16 @@ window.getComparisonState =
         t: comparisonT,
         meshCount: comparisonEntries.length,
     });
+document
+  .getElementById("btn-flythrough-stop")
+  ?.addEventListener("click", stopFlythrough);
 
+document
+  .getElementById("btn-camera-reset")
+  ?.addEventListener("click", resetCamera);
 
-console.log(
-    "[SASA MINE] main.js successfully loaded."
-);
+// Exposed for console debugging / inline HTML fallback.
+window.showModel = showModel;
+window.startFlythrough = startFlythrough;
+window.stopFlythrough = stopFlythrough;
+window.resetCamera = resetCamera;

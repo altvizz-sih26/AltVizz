@@ -1,2 +1,24 @@
-import { Link, NavLink } from 'react-router-dom';import Brand from './Brand';import Stardust from './Stardust';
-export default function Layout({children}){return <><Stardust/><header><Link to="/" aria-label="DepthWizard home"><Brand/></Link><nav><NavLink to="/">Home</NavLink><NavLink to="/upload">Upload</NavLink><NavLink to="/results">Results</NavLink><NavLink to="/viewer">Viewer</NavLink></nav><span className="demo-chip">DEMO MODE</span></header><main>{children}</main></>}
+import { Link, NavLink } from 'react-router-dom';
+import Brand from './Brand';
+import Stardust from './Stardust';
+import Footer from './Footer';
+
+export default function Layout({ children }) {
+  return (
+    <>
+      <Stardust />
+      <header>
+        <Link to="/" aria-label="DepthWizard home"><Brand /></Link>
+        <nav>
+          <NavLink to="/">Home</NavLink>
+          <NavLink to="/upload">Upload</NavLink>
+          <NavLink to="/results">Results</NavLink>
+          <NavLink to="/viewer">Viewer</NavLink>
+        </nav>
+        <span className="demo-chip">DEMO MODE</span>
+      </header>
+      <main>{children}</main>
+      <Footer />
+    </>
+  );
+}
