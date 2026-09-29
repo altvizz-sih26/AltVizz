@@ -52,3 +52,11 @@ dist-ssr
 
 # Large model files
 *.pt
+
+.env
+venv/
+app/results/
+app/uploads/
+*.db.bak
+requirements.lock.txt
+depthwizard.db
