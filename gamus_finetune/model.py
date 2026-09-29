@@ -199,7 +199,7 @@ def load_da_v2_model(encoder: str, checkpoint_path: str, device: str = "cpu") ->
     """Loads a pretrained DA-V2 model exactly as run.py does."""
     import sys
     sys.path.append("/Users/tanishka/Desktop/AltVizz/Depth_Wizard/Depth-Anything-V2")
-    from depth_anything_v2_from_person1.dpt import DepthAnythingV2  # noqa: import from DA-V2 repo, unmodified
+    from depth_anything_v2.dpt import DepthAnythingV2  # noqa: import from DA-V2 repo, unmodified
 
     if encoder not in ENCODER_CONFIGS:
         raise ValueError(f"Unknown encoder {encoder!r}, expected one of {list(ENCODER_CONFIGS)}")
