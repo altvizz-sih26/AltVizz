@@ -15,6 +15,9 @@ app = FastAPI(
     description="Backend for single-view height estimation + 3D flythrough generation (SIH26176)",
     version="0.1.0",
 )
+@app.get("/health")
+def health():
+    return {"ok": True}
 
 # Allow the frontend dev server to call this API. Tighten this before deploying.
 app.add_middleware(

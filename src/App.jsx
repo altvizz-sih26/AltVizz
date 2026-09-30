@@ -2,7 +2,7 @@ import { Routes, Route, Link, useNavigate } from 'react-router-dom';
 import { useEffect, useRef, useState } from 'react';
 import Layout from './components/Layout.jsx';
 import { DEMO_CONFIG } from './config/demoConfig';
-import { clearDemoJob, downloadResult, getJob, getResults, startProcessing, uploadImage } from './services/pipelineService';
+import { clearDemoJob, downloadResult, getJob, getResults, startProcessing, uploadImage, warmUpBackend } from './services/pipelineService';
 
 const stages = ['Image Ingestion', 'Depth Estimation', 'Terrain Classification', 'Reference Elevation', 'Height Calibration', 'DSM Generation', '3D Reconstruction'];
 const Arrow = () => <span className="arrow">→</span>;
@@ -22,7 +22,6 @@ function Home() {
     <section id="workflow" className="section">
       <p className="eyebrow">THE RECONSTRUCTION PATH</p>
       <h2>Terrain intelligence, layer by layer.</h2>
-      {/* CHANGED: workflow steps now sit inside a card instead of loose on the background */}
       <div className="workflow-card">
         <div className="workflow">
           {['Satellite Image', 'Depth Estimation', 'Terrain Analysis', 'Elevation Calibration', 'DSM', '3D Terrain'].map((x, i) =>
@@ -36,7 +35,6 @@ function Home() {
       </div>
     </section>
 
-    {/* NEW: choose-your-path cards */}
     <section className="section">
       <p className="eyebrow">CHOOSE YOUR PATH</p>
       <h2>Two ways to reconstruct terrain.</h2>
@@ -49,12 +47,12 @@ function Home() {
           <b>Start analysis <Arrow /></b>
         </Link>
         <Link className="mode-card" to="/compare">
-  <span className="mode-icon">◒</span>
-  <p className="eyebrow">COMPARATIVE ANALYSIS</p>
-  <h3>Before / After Terrain Compare</h3>
-  <p>Upload two images of the same site and compare elevation, DSM and 3D terrain side by side over time.</p>
-  <b>Start comparison <Arrow /></b>
-</Link>
+          <span className="mode-icon">◒</span>
+          <p className="eyebrow">COMPARATIVE ANALYSIS</p>
+          <h3>Before / After Terrain Compare</h3>
+          <p>Upload two images of the same site and compare elevation, DSM and 3D terrain side by side over time.</p>
+          <b>Start comparison <Arrow /></b>
+        </Link>
       </div>
     </section>
 
@@ -74,7 +72,7 @@ function Upload() {
   const [file, setFile] = useState(null);
   const [error, setError] = useState('');
   const [drag, setDrag] = useState(false);
-  const [uploading, setUploading] = useState(false); // NEW: real loading state
+  const [uploading, setUploading] = useState(false);
 
   const pick = f => {
     if (!f) return;
@@ -87,11 +85,8 @@ function Upload() {
     setFile(f);
   };
 
-  // FIXED: previously this awaited startProcessing() (which can take up to
-  // ~60s against the real backend) before navigating anywhere, so the
-  // button just sat there frozen with zero feedback. Now we upload, then
-  // navigate immediately to /processing, and let THAT page own waiting
-  // for the real result (with an actual visible loading state).
+  // Upload, then navigate immediately to /processing, which owns waiting
+  // for the real result (with a visible loading state).
   const go = async () => {
     setUploading(true);
     setError('');
@@ -129,8 +124,6 @@ function CompareUpload() {
 
   // NOTE: real before/after pipeline isn't wired up yet — this just
   // simulates a short "processing" beat, then opens the real 3D viewer.
-  // Swap this for an actual upload+process call once the backend
-  // supports two-image comparison.
   const go = async () => {
     setUploading(true);
     setError('');
@@ -167,14 +160,13 @@ function CompareUpload() {
     </div>
   );
 
-    return (
+  return (
     <Layout>
       <section className="page narrow">
         <p className="eyebrow">STEP 01 / INPUT</p>
         <h1>Upload before &amp; after imagery.</h1>
         <p className="lede">Upload two satellite images of the same site to compare elevation, DSM and terrain change over time.</p>
 
-        {/* CHANGED: before/after dropzones now sit side by side in a grid */}
         <div className="compare-grid">
           <div>
             <p className="eyebrow">BEFORE</p>
@@ -212,18 +204,15 @@ function Processing() {
 
     let cancelled = false;
 
-    // Cosmetic progress ticker: we don't get granular real progress from
-    // the backend (just pending/processing/completed/failed), so this
-    // creeps toward 90% while we wait for the REAL result, then jumps to
-    // 100% only once the backend genuinely finishes. It no longer
-    // completes on a fixed timer regardless of real status.
+    // Cosmetic progress ticker: creeps toward 90% while we wait for the
+    // real result, then jumps to 100% only when processing finishes.
     const ticker = setInterval(() => {
       setProgress(p => (p < 90 ? p + 1 : p));
       setActive(a => (a < stages.length - 2 ? a + 1 : a));
     }, 400);
 
-    // This is the REAL call - it polls the actual backend job status
-    // until it's completed or failed.
+    // Polls the real backend. If the backend fails, startProcessing()
+    // falls back to the demo result instead of throwing.
     startProcessing()
       .then(() => {
         if (cancelled) return;
@@ -273,13 +262,20 @@ function Results() {
   const fresh = () => { clearDemoJob(); nav('/upload'); };
 
   // "relative" mode means the numbers are an arbitrary uncalibrated
-  // guess, not real elevation - flag that clearly rather than presenting
-  // it as a confident result.
+  // guess, not real elevation - flag that clearly.
   const isUncalibrated = data?.calibrationMode === 'relative' || !data?.calibrationMode;
 
   return <Layout><section className="page"><p className="eyebrow">OUTPUT</p><h1>Reconstruction Complete.</h1><p className="lede">Your terrain package is ready to inspect and explore.</p><div className="input-line"><span>INPUT IMAGE</span><b>{data?.fileName || DEMO_CONFIG.defaultFileName}</b><i>{data?.fileType || 'image/tiff'}</i></div>
 
-    {isUncalibrated && data && (
+    {/* NEW: shown when the live backend failed and we fell back to the sample result */}
+    {data?.notice && (
+      <p style={{ marginBottom: '1rem', padding: '10px 14px', background: '#fff4d6', color: '#6b4e00', borderRadius: 8, fontSize: 14 }}>
+        ℹ {data.notice}
+      </p>
+    )}
+
+    {/* CHANGED: only show the uncalibrated warning for real (non-demo) results */}
+    {isUncalibrated && data && !data.demoMode && (
       <p className="error" style={{ marginBottom: '1rem' }}>
         ⚠ No reference elevation data (SRTM) was provided for this upload — the height values below are an uncalibrated estimate, not real-world elevation.
       </p>
@@ -315,18 +311,18 @@ function Results() {
           <dt>Reconstruction</dt><dd className="success">{data?.status || 'Complete'}</dd>
           <dt>Calibration</dt><dd>{data?.calibrationMode || 'relative (uncalibrated)'}</dd>
         </dl>
-        
-  <a className="button primary full"
-  href={data?.glbUrl ? `/viewer.html?glb=${encodeURIComponent(data.glbUrl)}&label=${encodeURIComponent(data.glbName || 'Terrain mesh')}` : '/viewer.html'}
-  target="_blank"
-  rel="noopener noreferrer"
->
-  View 3D Model <Arrow />
-</a>
+
+        <a className="button primary full"
+          href={data?.glbUrl ? `/viewer.html?glb=${encodeURIComponent(data.glbUrl)}&label=${encodeURIComponent(data.glbName || 'Terrain mesh')}` : '/viewer.html'}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          View 3D Model <Arrow />
+        </a>
       </article>
     </div>
     <button className="text-button back" onClick={fresh}>← Upload New Image</button>
-  </section>{modal && <div className="modal-backdrop" onMouseDown={() => setModal('')}><div className="modal" onMouseDown={e => e.stopPropagation()}><button className="close" onClick={() => setModal('')}>×</button>{modal === 'dsm' ? <><TerrainArt dsmUrl={data?.dsmUrl} minHeightM={data?.minHeightM} maxHeightM={data?.maxHeightM} /><h2>Digital Surface Model</h2><p>{isUncalibrated ? 'Uncalibrated estimate — no reference elevation data was used.' : `Calibrated against real elevation data (${data?.calibrationMode} mode).`}</p></> : <><div className="model-preview big">GLB</div><h2>GLB Terrain Output</h2><p>{data?.glbUrl ? 'This GLB is ready for download or exploration in the interactive viewer.' : 'Real mesh generation isn\u2019t built server-side yet — showing a demo terrain mesh instead.'}</p><div className="actions"><button className="button primary" onClick={downloadResult}>Download GLB</button></div></>}</div></div>}</Layout>;
+  </section>{modal && <div className="modal-backdrop" onMouseDown={() => setModal('')}><div className="modal" onMouseDown={e => e.stopPropagation()}><button className="close" onClick={() => setModal('')}>×</button>{modal === 'dsm' ? <><TerrainArt dsmUrl={data?.dsmUrl} minHeightM={data?.minHeightM} maxHeightM={data?.maxHeightM} /><h2>Digital Surface Model</h2><p>{data?.demoMode ? 'Sample result — live processing was unavailable.' : isUncalibrated ? 'Uncalibrated estimate — no reference elevation data was used.' : `Calibrated against real elevation data (${data?.calibrationMode} mode).`}</p></> : <><div className="model-preview big">GLB</div><h2>GLB Terrain Output</h2><p>{data?.glbUrl ? 'This GLB is ready for download or exploration in the interactive viewer.' : 'Real mesh generation isn\u2019t built server-side yet — showing a demo terrain mesh instead.'}</p><div className="actions"><button className="button primary" onClick={downloadResult}>Download GLB</button></div></>}</div></div>}</Layout>;
 }
 
 function ViewerCanvas({ top, reset, fly }) {
@@ -373,11 +369,13 @@ function Viewer() {
   const wrap = useRef();
   const full = () => wrap.current.requestFullscreen?.();
   // NOTE: this is still the placeholder 2D canvas, not the real Three.js
-  // viewer (main.js) with actual GLB models. Flagged as a follow-up - see
-  // chat discussion on whether to redirect this route to the real viewer.
+  // viewer (main.js) with actual GLB models.
   return <Layout><section className="viewer-page"><div className="viewer-title"><div><p className="eyebrow">INTERACTIVE TERRAIN VIEWER</p><h1>Demo terrain model</h1><span className="online">● GLB ready · local demo asset</span></div><button className="text-button" onClick={() => nav('/results')}>← Back to results</button></div><div className="viewer-shell" ref={wrap}><ViewerCanvas top={top} reset={reset} fly={fly} /><div className="viewer-hint">Drag to orbit · scroll to zoom</div><div className="viewer-controls"><button onClick={() => setReset(x => x + 1)}>Reset view</button><button onClick={() => setTop(!top)}>{top ? 'Perspective' : 'Top view'}</button><button className={fly ? 'selected' : ''} onClick={() => setFly(!fly)}>Flythrough</button><button onClick={full}>Fullscreen</button><button onClick={downloadResult}>↓ Download GLB</button></div></div></section></Layout>;
 }
 
 export default function App() {
+  // Wake the free Render backend as soon as the site opens
+  useEffect(() => { warmUpBackend(); }, []);
+
   return <Routes><Route path="/" element={<Home />} /><Route path="/upload" element={<Upload />} /><Route path="/compare" element={<CompareUpload />} /><Route path="/processing" element={<Processing />} /><Route path="/results" element={<Results />} /><Route path="/viewer" element={<Viewer />} /><Route path="*" element={<Home />} /></Routes>;
 }
