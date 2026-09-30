@@ -20,9 +20,18 @@ them normally. If the project structure changes, only SIH_ROOT below needs
 updating.
 
 REQUIRES: checkpoints/depth_anything_v2_<encoder>.pth to exist at the repo
-root (NOT committed to git - too large). Download separately from the
-Depth Anything V2 releases and drop it in a `checkpoints/` folder before
-this will run end-to-end. See README for the exact file the team is using.
+root. The team's checkpoint is the Small model, so the file is
+checkpoints/depth_anything_v2_vits.pth and the default encoder is "vits".
+Override with the DEPTH_MODEL_ENCODER env var if you use a different one.
+
+OUTPUTS per upload (all written to app/results/ and served under
+/static/results/):
+  <name>_heightmap.png   - grayscale height map
+  <name>_terrain.glb     - textured 3D mesh
+  <name>_analysis.npz    - elevation grid for the viewer's Analysis Map,
+                           slope and region stats. The frontend derives its
+                           URL from the GLB URL (_terrain.glb -> _analysis.npz),
+                           so no database change is needed.
 """
 import json
 import os
@@ -60,6 +69,10 @@ DEVICE = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is
 RESULTS_DIR = os.path.join(SIH_ROOT, "app", "results")
 os.makedirs(RESULTS_DIR, exist_ok=True)
 
+# Largest side (in pixels) of the elevation grid saved for the viewer.
+# Keeps the .npz small enough to download quickly in the browser.
+ANALYSIS_MAX_SIDE = 1024
+
 # --- lazy singleton model load -----------------------------------------------
 # Loading the ViT checkpoint takes real time; do it once per process, not
 # once per upload. Guarded by a lock since FastAPI's BackgroundTasks can
@@ -77,9 +90,8 @@ def _get_model() -> DepthAnythingV2:
             if not os.path.isfile(CHECKPOINT_PATH):
                 raise FileNotFoundError(
                     f"Depth model checkpoint not found at {CHECKPOINT_PATH}. "
-                    f"Download depth_anything_v2_{ENCODER}.pth from the Depth "
-                    f"Anything V2 releases and place it in a `checkpoints/` "
-                    f"folder at the repo root."
+                    f"Expected depth_anything_v2_{ENCODER}.pth inside the "
+                    f"`checkpoints/` folder at the repo root."
                 )
             model = DepthAnythingV2(**MODEL_CONFIGS[ENCODER])
             model.load_state_dict(torch.load(CHECKPOINT_PATH, map_location="cpu"))
@@ -90,7 +102,7 @@ def _get_model() -> DepthAnythingV2:
 
 def _auto_fetch_srtm(image_path: str) -> str | None:
     """
-    NEW: Tries to automatically get a matching SRTM reference for this upload
+    Tries to automatically get a matching SRTM reference for this upload
     using Person 5's generic process_new_image.py, instead of requiring the
     caller to pass srtm_path manually.
 
@@ -108,7 +120,7 @@ def _auto_fetch_srtm(image_path: str) -> str | None:
 
 def _try_generate_glb(elevation: np.ndarray, image_path: str, base_name: str) -> str | None:
     """
-    NEW: Builds the textured 3D mesh (Person 3's create_terrain.py, now a
+    Builds the textured 3D mesh (Person 3's create_terrain.py, now a
     reusable function) from the elevation this pipeline just computed.
 
     Returns the GLB's public path on success, or None if mesh generation
@@ -126,6 +138,41 @@ def _try_generate_glb(elevation: np.ndarray, image_path: str, base_name: str) ->
         return None
 
 
+def _save_analysis_npz(elevation: np.ndarray, base_name: str) -> str | None:
+    """
+    NEW: Saves the elevation grid as <base_name>_analysis.npz next to the GLB,
+    so the 3D viewer can build the Analysis Map, slope and region statistics
+    for this upload instead of showing "No analysis data".
+
+    The array is stored under the key `elevation`, which is what
+    normalizeGrid() in src/main.js reads for a single-snapshot file. That
+    function defaults to `elevation_before`, so saving only
+    `elevation_after` would leave the maps empty. A single upload has no
+    "before" snapshot.
+
+    Never raises: if saving fails, the rest of the pipeline result is still
+    returned and the viewer simply shows the mesh without analytics.
+    Returns the public path on success, or None on failure.
+    """
+    try:
+        elev = np.asarray(elevation, dtype=np.float32)
+
+        # Downscale very large grids so the browser download stays small.
+        longest = max(elev.shape[:2])
+        if longest > ANALYSIS_MAX_SIDE:
+            scale = ANALYSIS_MAX_SIDE / longest
+            new_w = max(1, int(round(elev.shape[1] * scale)))
+            new_h = max(1, int(round(elev.shape[0] * scale)))
+            elev = cv2.resize(elev, (new_w, new_h), interpolation=cv2.INTER_AREA)
+
+        npz_filename = f"{base_name}_analysis.npz"
+        np.savez_compressed(os.path.join(RESULTS_DIR, npz_filename), elevation=elev)
+        return f"/static/results/{npz_filename}"
+    except Exception as e:
+        print(f"[depth_pipeline] analysis npz failed for {base_name}: {e}")
+        return None
+
+
 def run_pipeline(image_path: str, srtm_path: str | None = None) -> dict:
     """
     Runs the full pipeline on one uploaded image:
@@ -133,27 +180,28 @@ def run_pipeline(image_path: str, srtm_path: str | None = None) -> dict:
       2. Depth Anything V2 -> relative depth map, normalized 0-1
       3. OpenCV terrain classifier -> per-pixel terrain class mask
       4. If srtm_path wasn't explicitly provided, try to auto-fetch it for
-         this specific image (NEW - works for any georeferenced upload,
-         not just the 3 known test regions)
+         this specific image (works for any georeferenced upload, not just
+         the 3 known test regions)
       5. Elevation calibration -> real-world-scale elevation
          (terrain-aware if srtm_path given/found, else "relative" mode - a
          plausible but uncalibrated height scale, per elevation_pipeline.py)
       6. Save a height-map visualization PNG
-      7. Build a textured 3D mesh (.glb) from the elevation + source image
-         (NEW - Person 3's create_terrain.py, now wired in directly)
+      7. Save the elevation grid as an analysis .npz for the viewer (NEW)
+      8. Build a textured 3D mesh (.glb) from the elevation + source image
+         (Person 3's create_terrain.py, wired in directly)
 
     Returns a dict shaped for the `Result` DB model:
         height_map_path, flythrough_path, min/max/mean_height_m
 
-    `flythrough_path` is now the real GLB path when mesh generation
-    succeeds, or None if it fails for any reason (pipeline still returns
-    the rest of the result rather than crashing - see _try_generate_glb).
+    `flythrough_path` is the real GLB path when mesh generation succeeds, or
+    None if it fails for any reason (pipeline still returns the rest of the
+    result rather than crashing - see _try_generate_glb).
     """
     raw_image = cv2.imread(image_path)
     if raw_image is None:
         raise ValueError(f"Could not read image at {image_path} (unsupported or corrupt file)")
 
-    # NEW: auto-fetch SRTM if the caller didn't already supply one
+    # Auto-fetch SRTM if the caller didn't already supply one
     if srtm_path is None:
         srtm_path = _auto_fetch_srtm(image_path)
 
@@ -178,12 +226,17 @@ def run_pipeline(image_path: str, srtm_path: str | None = None) -> dict:
     height_map_full_path = os.path.join(RESULTS_DIR, height_map_filename)
     _save_height_map_png(elevation, height_map_full_path)
 
-    # 5. NEW: build the textured 3D mesh from this same elevation array
+    # 5. NEW: save the elevation grid for the viewer's analysis panels.
+    #    File name is derived from base_name, same as the GLB, so the
+    #    frontend can find it without any extra field in the database.
+    _save_analysis_npz(elevation, base_name)
+
+    # 6. Build the textured 3D mesh from this same elevation array
     flythrough_path = _try_generate_glb(elevation, image_path, base_name)
 
     return {
         "height_map_path": f"/static/results/{height_map_filename}",
-        "flythrough_path": flythrough_path,  # NEW - real GLB path, or None if generation failed
+        "flythrough_path": flythrough_path,  # real GLB path, or None if generation failed
         "min_height_m": float(np.nanmin(elevation)),
         "max_height_m": float(np.nanmax(elevation)),
         "mean_height_m": float(np.nanmean(elevation)),

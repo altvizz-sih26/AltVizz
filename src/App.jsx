@@ -317,7 +317,7 @@ function Results() {
         </dl>
         
   <a className="button primary full"
-  href={data?.glbUrl ? `/viewer.html?glb=${encodeURIComponent(data.glbUrl)}&label=${encodeURIComponent(data.glbName || 'Terrain mesh')}` : '/viewer.html'}
+  href={data?.glbUrl ? `/viewer.html?glb=${encodeURIComponent(data.glbUrl)}&label=${encodeURIComponent(data.glbName || 'Terrain mesh')}${data.glbUrl.endsWith('_terrain.glb') ? `&analysis=${encodeURIComponent(data.glbUrl.replace('_terrain.glb', '_analysis.npz'))}` : ''}` : '/viewer.html'}
   target="_blank"
   rel="noopener noreferrer"
 >
