@@ -319,6 +319,14 @@ function Results() {
         >
           View 3D Model <Arrow />
         </a>
+        
+  <a className="button primary full"
+  href={data?.glbUrl ? `/viewer.html?glb=${encodeURIComponent(data.glbUrl)}&label=${encodeURIComponent(data.glbName || 'Terrain mesh')}${data.glbUrl.endsWith('_terrain.glb') ? `&analysis=${encodeURIComponent(data.glbUrl.replace('_terrain.glb', '_analysis.npz'))}` : ''}` : '/viewer.html'}
+  target="_blank"
+  rel="noopener noreferrer"
+>
+  View 3D Model <Arrow />
+</a>
       </article>
     </div>
     <button className="text-button back" onClick={fresh}>← Upload New Image</button>

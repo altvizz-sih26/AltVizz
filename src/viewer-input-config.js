@@ -4,8 +4,8 @@ const viewerInputConfig = {
     // 1-GLB mode: set only glbUrlAfter (or legacy glbUrl); leave glbUrlBefore "".
     glbUrl: "",            // legacy alias for glbUrlAfter
     meshUpAxis: "auto",    // "auto" | "y" | "z" — which GLB axis is height
-    glbUrlBefore: "/before (2).glb",
-    glbUrlAfter: "/during (1).glb",
+    glbUrlBefore: "/before.glb",
+    glbUrlAfter: "/during.glb",
 
     // ---- ANALYSIS ZIP(S) --------------------------------------------------
     // Packed .npz or zip of loose .npy files; both work.
