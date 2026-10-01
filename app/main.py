@@ -4,11 +4,12 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from app.database import Base, engine
+from app.database import Base, engine, migrate_schema
 from app.routers import upload, jobs
 
 # Create tables on startup (fine for dev; use Alembic migrations later for prod)
 Base.metadata.create_all(bind=engine)
+migrate_schema()
 
 app = FastAPI(
     title="DepthWizard API",
@@ -18,6 +19,7 @@ app = FastAPI(
 @app.get("/health")
 def health():
     return {"ok": True}
+
 
 # Allow the frontend dev server to call this API. Tighten this before deploying.
 app.add_middleware(
@@ -42,6 +44,8 @@ def root():
     return {"status": "ok", "service": "DepthWizard API"}
 
 
-@app.get("/health")
-def health():
-    return {"status": "healthy"}
+
+
+
+
+

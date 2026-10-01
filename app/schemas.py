@@ -15,7 +15,11 @@ class UploadOut(BaseModel):
 class JobOut(BaseModel):
     id: str
     upload_id: str
+    after_upload_id: Optional[str] = None
+    kind: str = "single"
     status: str
+    stage: Optional[str] = None
+    progress: int = 0
     error_message: Optional[str] = None
     created_at: datetime
     updated_at: datetime
@@ -27,7 +31,13 @@ class JobOut(BaseModel):
 class ResultOut(BaseModel):
     job_id: str
     height_map_path: Optional[str] = None
+    dsm_geotiff_path: Optional[str] = None
+    before_dsm_geotiff_path: Optional[str] = None
+    after_dsm_geotiff_path: Optional[str] = None
     flythrough_path: Optional[str] = None
+    analysis_path: Optional[str] = None
+    before_flythrough_path: Optional[str] = None
+    change_summary: Optional[str] = None
     min_height_m: Optional[float] = None
     max_height_m: Optional[float] = None
     mean_height_m: Optional[float] = None

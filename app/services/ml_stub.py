@@ -16,7 +16,11 @@ a silent crash.
 from app.services.depth_pipeline import run_pipeline
 
 
-def run_height_estimation(image_path: str, srtm_path: str | None = None) -> dict:
+def run_height_estimation(
+    image_path: str,
+    srtm_path: str | None = None,
+    progress=lambda stage, pct: None,
+) -> dict:
     """
     Runs the real height-estimation pipeline on an uploaded image.
 
@@ -29,4 +33,4 @@ def run_height_estimation(image_path: str, srtm_path: str | None = None) -> dict
 
     Returns a dict matching the Result model's fields.
     """
-    return run_pipeline(image_path, srtm_path=srtm_path)
+    return run_pipeline(image_path, srtm_path=srtm_path, progress=progress)

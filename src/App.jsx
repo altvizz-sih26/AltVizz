@@ -2,9 +2,10 @@ import { Routes, Route, Link, useNavigate } from 'react-router-dom';
 import { useEffect, useRef, useState } from 'react';
 import Layout from './components/Layout.jsx';
 import { DEMO_CONFIG } from './config/demoConfig';
-import { clearDemoJob, downloadResult, getJob, getResults, startProcessing, uploadImage, warmUpBackend } from './services/pipelineService';
+import { clearDemoJob, downloadResult, getJob, getResults, startProcessing, uploadComparison, uploadImage, warmUpBackend } from './services/pipelineService';
 
-const stages = ['Image Ingestion', 'Depth Estimation', 'Terrain Classification', 'Reference Elevation', 'Height Calibration', 'DSM Generation', '3D Reconstruction'];
+const singleStages = ['Image Ingestion', 'Depth Estimation', 'Terrain Classification', 'Reference Elevation', 'Height Calibration', 'DSM Generation', '3D Reconstruction'];
+const compareStages = ['Before reconstruction', 'Image alignment', 'After reconstruction', 'Elevation comparison', 'Saving comparison'];
 const Arrow = () => <span className="arrow">→</span>;
 
 function Home() {
@@ -122,14 +123,16 @@ function CompareUpload() {
     which === 'before' ? setBefore(f) : setAfter(f);
   };
 
-  // NOTE: real before/after pipeline isn't wired up yet — this just
-  // simulates a short "processing" beat, then opens the real 3D viewer.
   const go = async () => {
     setUploading(true);
     setError('');
-    setTimeout(() => {
-      window.location.href = '/viewer.html';
-    }, 600);
+    try {
+      await uploadComparison(before, after);
+      nav('/processing');
+    } catch (err) {
+      setError(err.message || 'Comparison upload failed. Please try again.');
+      setUploading(false);
+    }
   };
 
   const dropzone = (label, file, which, dragging, setDragging) => (
@@ -195,51 +198,49 @@ function CompareUpload() {
 function Processing() {
   const nav = useNavigate();
   const job = getJob();
-  const [active, setActive] = useState(0);
-  const [progress, setProgress] = useState(2);
+  const [stage, setStage] = useState(job?.stage || 'Waiting for processing');
+  const [progress, setProgress] = useState(job?.progress ?? 0);
   const [errorMsg, setErrorMsg] = useState('');
+  const stages = job?.kind === 'compare' ? compareStages : singleStages;
+  const active = progress >= 100
+    ? stages.length
+    : Math.min(stages.length - 1, Math.floor(progress / 100 * stages.length));
 
   useEffect(() => {
     if (!job) { nav('/upload'); return; }
 
     let cancelled = false;
 
-    // Cosmetic progress ticker: creeps toward 90% while we wait for the
-    // real result, then jumps to 100% only when processing finishes.
-    const ticker = setInterval(() => {
-      setProgress(p => (p < 90 ? p + 1 : p));
-      setActive(a => (a < stages.length - 2 ? a + 1 : a));
-    }, 400);
-
-    // Polls the real backend. If the backend fails, startProcessing()
-    // falls back to the demo result instead of throwing.
-    startProcessing()
-      .then(() => {
+    // Polls the real backend and keeps its reported stage/progress visible.
+    startProcessing(data => {
+      if (cancelled) return;
+      setStage(data.stage || 'Processing');
+      if (Number.isFinite(data.progress)) setProgress(data.progress);
+    })
+      .then(finishedJob => {
         if (cancelled) return;
-        clearInterval(ticker);
-        setProgress(100);
-        setActive(stages.length);
+        setStage(finishedJob.stage || 'Completed');
+        setProgress(finishedJob.progress ?? 100);
         setTimeout(() => nav('/results'), 500);
       })
       .catch(err => {
         if (cancelled) return;
-        clearInterval(ticker);
         setErrorMsg(err.message || 'Processing failed.');
       });
 
-    return () => { cancelled = true; clearInterval(ticker); };
+    return () => { cancelled = true; };
   }, []);
 
   if (errorMsg) {
-    return <Layout><section className="page narrow processing"><p className="eyebrow">DEMO PIPELINE · {job?.fileName}</p><h1>Reconstruction failed</h1><p className="error">{errorMsg}</p><button className="button primary" onClick={() => nav('/upload')}>← Try a different image</button></section></Layout>;
+    return <Layout><section className="page narrow processing"><p className="eyebrow">PIPELINE · {job?.fileName}</p><h1>Reconstruction failed</h1><p className="error">{errorMsg}</p><button className="button primary" onClick={() => nav('/upload')}>← Try a different image</button></section></Layout>;
   }
 
-  return <Layout><section className="page narrow processing"><p className="eyebrow">PIPELINE · {job?.fileName}</p><h1>{progress === 100 ? 'Reconstruction Complete' : 'Reconstructing terrain…'}</h1><div className="progress"><i style={{ width: progress + '%' }} /></div><div className="progress-label"><span>Overall progress</span><b>{progress}%</b></div><div className="stage-list">{stages.map((s, i) => <div className={'stage ' + (i < active ? 'done' : i === active ? 'active' : '')} key={s}><span className="stage-index">{String(i + 1).padStart(2, '0')}</span><b>{s}</b><em>{i < active ? 'Completed' : i === active ? 'Processing' : 'Waiting'}</em><span className="status">{i < active ? '✓' : i === active ? '◌' : '—'}</span></div>)}</div><p className="demo-note">Waiting on the real backend pipeline — this can take up to a minute depending on your machine.</p></section></Layout>;
+  return <Layout><section className="page narrow processing"><p className="eyebrow">PIPELINE · {job?.fileName}</p><h1>{progress === 100 ? 'Processing Complete' : job?.kind === 'compare' ? 'Comparing terrain…' : 'Reconstructing terrain…'}</h1><div className="progress"><i style={{ width: progress + '%' }} /></div><div className="progress-label"><span>{stage}</span><b>{progress}%</b></div><div className="stage-list">{stages.map((s, i) => <div className={'stage ' + (i < active ? 'done' : i === active ? 'active' : '')} key={s}><span className="stage-index">{String(i + 1).padStart(2, '0')}</span><b>{s}</b><em>{i < active ? 'Completed' : i === active ? 'Processing' : 'Waiting'}</em><span className="status">{i < active ? '✓' : i === active ? '◌' : '—'}</span></div>)}</div><p className="demo-note">Waiting on the real backend pipeline — this can take up to a minute depending on your machine.</p></section></Layout>;
 }
 
 // Shows the REAL generated height map when available; falls back to the
 // decorative placeholder art only if no real result exists yet.
-function TerrainArt({ dsmUrl, minHeightM, maxHeightM }) {
+function TerrainArt({ dsmUrl, minHeightM, maxHeightM, comparison = false }) {
   if (dsmUrl) {
     return (
       <div className="terrain-art" aria-label="Generated DSM elevation visualization">
@@ -249,7 +250,12 @@ function TerrainArt({ dsmUrl, minHeightM, maxHeightM }) {
       </div>
     );
   }
-  return <div className="terrain-art" aria-label="Demo DSM elevation visualization"><div className="contours" /><span>HIGH · 842m</span><small>LOW · 215m</small></div>;
+  return (
+    <div className="terrain-art terrain-art-empty" aria-label={comparison ? 'Before and after DSM GeoTIFF exports' : 'DSM preview unavailable'}>
+      <span>{comparison ? 'BEFORE / AFTER' : 'DSM PREVIEW UNAVAILABLE'}</span>
+      {comparison && <small>GEOTIFF EXPORTS</small>}
+    </div>
+  );
 }
 
 function Results() {
@@ -263,9 +269,14 @@ function Results() {
 
   // "relative" mode means the numbers are an arbitrary uncalibrated
   // guess, not real elevation - flag that clearly.
-  const isUncalibrated = data?.calibrationMode === 'relative' || !data?.calibrationMode;
+  const isUncalibrated = data?.calibrationMode === 'relative' || (!data?.calibrationMode && data?.kind !== 'compare');
+  const relativeComparison = data?.kind === 'compare' && data?.calibrationMode === 'relative';
+  const outputFormats = [
+    (data?.dsmUrl || data?.dsmGeotiffUrl || data?.beforeDsmGeotiffUrl || data?.afterDsmGeotiffUrl) && 'DSM',
+    data?.glbUrl && 'GLB',
+  ].filter(Boolean).join(' + ') || 'No output artifacts';
 
-  return <Layout><section className="page"><p className="eyebrow">OUTPUT</p><h1>Reconstruction Complete.</h1><p className="lede">Your terrain package is ready to inspect and explore.</p><div className="input-line"><span>INPUT IMAGE</span><b>{data?.fileName || DEMO_CONFIG.defaultFileName}</b><i>{data?.fileType || 'image/tiff'}</i></div>
+  return <Layout><section className="page"><p className="eyebrow">OUTPUT</p><h1>{data?.kind === 'compare' ? 'Comparison Complete.' : 'Reconstruction Complete.'}</h1><p className="lede">{data?.kind === 'compare' ? 'Before and after terrain outputs are ready to inspect.' : 'Your terrain package is ready to inspect and explore.'}</p><div className="input-line"><span>{data?.kind === 'compare' ? 'BEFORE / AFTER' : 'INPUT IMAGE'}</span><b>{data?.fileName || DEMO_CONFIG.defaultFileName}</b><i>{data?.fileType || 'image/tiff'}</i></div>
 
     {/* NEW: shown when the live backend failed and we fell back to the sample result */}
     {data?.notice && (
@@ -275,63 +286,68 @@ function Results() {
     )}
 
     {/* CHANGED: only show the uncalibrated warning for real (non-demo) results */}
-    {isUncalibrated && data && !data.demoMode && (
+    {isUncalibrated && data && !data.demoMode && data.kind !== 'compare' && (
       <p className="error" style={{ marginBottom: '1rem' }}>
         ⚠ No reference elevation data (SRTM) was provided for this upload — the height values below are an uncalibrated estimate, not real-world elevation.
       </p>
     )}
+    {relativeComparison && (
+      <p className="demo-note">No SRTM reference was used. Comparison elevations are relative estimates, not absolute real-world heights.</p>
+    )}
 
     <div className="results-grid">
       <article className="result-card">
-        <TerrainArt dsmUrl={data?.dsmUrl} minHeightM={data?.minHeightM} maxHeightM={data?.maxHeightM} />
+        <TerrainArt dsmUrl={data?.dsmUrl} minHeightM={data?.minHeightM} maxHeightM={data?.maxHeightM} comparison={data?.kind === 'compare'} />
         <div className="card-copy">
           <p className="eyebrow">ELEVATION / DSM</p>
-          <h2>Digital Surface Model</h2>
+          <h2>{data?.kind === 'compare' ? 'Before / after DSMs' : 'Digital Surface Model'}</h2>
           {data?.meanHeightM != null
             ? <p>Mean height: {data.meanHeightM.toFixed(1)}m {data.calibrationMode && `· mode: ${data.calibrationMode}`}{data.correlation != null && ` · fit correlation: ${data.correlation.toFixed(2)}`}</p>
-            : <p>Terrain-relative elevation visualisation generated for this output.</p>
+            : <p>{data?.kind === 'compare' ? 'GeoTIFF exports are available below. No raster preview was generated.' : 'Terrain-relative elevation visualisation generated for this output.'}</p>
           }
-          <button className="button secondary" onClick={() => setModal('dsm')}>View DSM</button>
+          {data?.dsmUrl && <button className="button secondary" onClick={() => setModal('dsm')}>View DSM</button>}
+          <div className="artifact-links">
+            {data?.dsmGeotiffUrl && <a className="text-button" href={data.dsmGeotiffUrl} download>Download DSM GeoTIFF</a>}
+            {data?.kind === 'compare' && data?.beforeDsmGeotiffUrl && <a className="text-button" href={data.beforeDsmGeotiffUrl} download>Download before DSM GeoTIFF</a>}
+            {data?.kind === 'compare' && data?.afterDsmGeotiffUrl && <a className="text-button" href={data.afterDsmGeotiffUrl} download>Download after DSM GeoTIFF</a>}
+          </div>
         </div>
       </article>
       <article className="result-card">
-        <div className="model-preview"><span>◒</span><div>GLB<br />TERRAIN</div></div>
+        {data?.glbUrl
+          ? <div className="model-preview"><span>◒</span><div>GLB<br />TERRAIN</div></div>
+          : <div className="model-preview model-preview-empty">GLB NOT GENERATED</div>}
         <div className="card-copy">
           <p className="eyebrow">3D TERRAIN MODEL</p>
           <h2>Terrain mesh</h2>
-          <p>{data?.glbName || DEMO_CONFIG.demoGlbName} · GLB format{!data?.glbUrl && ' (placeholder — real mesh generation not yet built)'}</p>
-          <div className="button-row"><button className="button secondary" onClick={() => setModal('glb')}>View GLB Output</button><button className="icon-button" title="Download GLB" onClick={downloadResult}>↓</button></div>
+          <p>{data?.glbUrl ? `${data.glbName} · GLB format` : 'Mesh generation did not produce a GLB for this job.'}</p>
+          <div className="button-row"><button className="button secondary" disabled={!data?.glbUrl} onClick={() => setModal('glb')}>View GLB Output</button><button className="icon-button" title="Download GLB" disabled={!data?.glbUrl} onClick={downloadResult}>↓</button></div>
         </div>
       </article>
       <article className="summary-card">
         <p className="eyebrow">PROCESSING SUMMARY</p>
         <dl>
           <dt>Input format</dt><dd>{data?.fileType || 'image/tiff'}</dd>
-          <dt>Output format</dt><dd>DSM + GLB</dd>
+          <dt>Output format</dt><dd>{outputFormats}</dd>
           <dt>Reconstruction</dt><dd className="success">{data?.status || 'Complete'}</dd>
           <dt>Calibration</dt><dd>{data?.calibrationMode || 'relative (uncalibrated)'}</dd>
         </dl>
 
-        <a className="button primary full"
-          href={data?.glbUrl ? `/viewer.html?glb=${encodeURIComponent(data.glbUrl)}&label=${encodeURIComponent(data.glbName || 'Terrain mesh')}` : '/viewer.html'}
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          View 3D Model <Arrow />
-        </a>
-        
-  <a className="button primary full"
-  href={data?.glbUrl ? `/viewer.html?glb=${encodeURIComponent(data.glbUrl)}&label=${encodeURIComponent(data.glbName || 'Terrain mesh')}${data.glbUrl.endsWith('_terrain.glb') ? `&analysis=${encodeURIComponent(data.glbUrl.replace('_terrain.glb', '_analysis.npz'))}` : ''}` : '/viewer.html'}
-  target="_blank"
-  rel="noopener noreferrer"
->
-  View 3D Model <Arrow />
-</a>
+        {data?.glbUrl
+          ? <a className="button primary full" href={viewerHref(data)} target="_blank" rel="noopener noreferrer">View 3D Model <Arrow /></a>
+          : <button className="button primary full" disabled>3D model unavailable</button>}
       </article>
     </div>
     <button className="text-button back" onClick={fresh}>← Upload New Image</button>
   </section>{modal && <div className="modal-backdrop" onMouseDown={() => setModal('')}><div className="modal" onMouseDown={e => e.stopPropagation()}><button className="close" onClick={() => setModal('')}>×</button>{modal === 'dsm' ? <><TerrainArt dsmUrl={data?.dsmUrl} minHeightM={data?.minHeightM} maxHeightM={data?.maxHeightM} /><h2>Digital Surface Model</h2><p>{data?.demoMode ? 'Sample result — live processing was unavailable.' : isUncalibrated ? 'Uncalibrated estimate — no reference elevation data was used.' : `Calibrated against real elevation data (${data?.calibrationMode} mode).`}</p></> : <><div className="model-preview big">GLB</div><h2>GLB Terrain Output</h2><p>{data?.glbUrl ? 'This GLB is ready for download or exploration in the interactive viewer.' : 'Real mesh generation isn\u2019t built server-side yet — showing a demo terrain mesh instead.'}</p><div className="actions"><button className="button primary" onClick={downloadResult}>Download GLB</button></div></>}</div></div>}</Layout>;
 }
+
+const viewerHref = d => {
+  const q = new URLSearchParams({ glb: d.glbUrl, label: d.glbName });
+  if (d.analysisUrl) q.set('analysis', d.analysisUrl);
+  if (d.glbBeforeUrl) q.set('glbBefore', d.glbBeforeUrl);
+  return `/viewer.html?${q}`;
+};
 
 function ViewerCanvas({ top, reset, fly }) {
   const ref = useRef();

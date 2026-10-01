@@ -5,9 +5,6 @@ const API_BASE = import.meta.env.VITE_API_BASE || 'http://127.0.0.1:8000';
 
 const STATE_KEY = 'depthwizard-demo-job';
 
-const FALLBACK_NOTICE =
-  'Live processing is unavailable right now. Showing a sample result.';
-
 export const getJob = () => JSON.parse(sessionStorage.getItem(STATE_KEY) || 'null');
 
 function saveJob(job) {
@@ -43,22 +40,9 @@ function buildBaseJob(file) {
   };
 }
 
-// Turns any job into a sample-result job so the UI keeps working
-function toDemoJob(job, reason) {
-  console.warn('Falling back to demo result:', reason);
-  return saveJob({
-    ...job,
-    demoMode: true,
-    status: 'completed',
-    result: null,
-    fallbackReason: String(reason),
-  });
-}
-
 /**
  * Uploads an image (and optionally a matching SRTM elevation file) to the
- * real backend. If the backend is down, asleep or crashed, we fall back
- * to the demo result instead of showing an error.
+ * real backend.
  */
 export const uploadImage = async (file, srtmFile = null) => {
   const base = buildBaseJob(file);
@@ -74,15 +58,10 @@ export const uploadImage = async (file, srtmFile = null) => {
       body: formData,
     });
   } catch (err) {
-    // Network error, backend asleep or crashed, timeout
-    return toDemoJob({ ...base, demoMode: true }, err.message);
+    throw new Error(`Could not reach the processing backend: ${err.message}`);
   }
 
   if (!response.ok) {
-    // 5xx = backend trouble -> demo. 4xx = bad user file -> show the real error
-    if (response.status >= 500) {
-      return toDemoJob({ ...base, demoMode: true }, `Upload ${response.status}`);
-    }
     const body = await response.json().catch(() => ({}));
     throw new Error(body.detail || `Upload failed (${response.status})`);
   }
@@ -96,11 +75,46 @@ export const uploadImage = async (file, srtmFile = null) => {
   });
 };
 
+export const uploadComparison = async (before, after, srtmFile = null) => {
+  const base = buildBaseJob(before);
+  const formData = new FormData();
+  formData.append('before_file', before);
+  formData.append('after_file', after);
+  if (srtmFile) formData.append('srtm_file', srtmFile);
+
+  let response;
+  try {
+    response = await fetchWithTimeout(`${API_BASE}/api/upload/compare`, {
+      method: 'POST',
+      body: formData,
+    });
+  } catch (err) {
+    throw new Error(`Could not reach the processing backend: ${err.message}`);
+  }
+
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.detail || `Upload failed (${response.status})`);
+  }
+
+  const data = await response.json();
+  return saveJob({
+    ...base,
+    fileName: `${before.name} / ${after.name}`,
+    afterFileName: after.name,
+    kind: data.kind || 'compare',
+    backendJobId: data.id,
+    demoMode: false,
+    status: data.status,
+    stage: data.stage,
+    progress: data.progress ?? 0,
+  });
+};
+
 /**
- * Polls the backend until the job finishes. If the backend crashes or
- * the job fails, we fall back to the demo result.
+ * Polls the backend until the job finishes or reports a real failure.
  */
-export const startProcessing = async () => {
+export const startProcessing = async (onProgress = () => {}) => {
   const job = getJob();
   if (!job) throw new Error('Select an image first.');
 
@@ -124,22 +138,40 @@ export const startProcessing = async () => {
 
       consecutiveErrors = 0;
       const data = await response.json();
+      onProgress(data);
+      saveJob({
+        ...job,
+        status: data.status,
+        stage: data.stage,
+        progress: data.progress ?? job.progress ?? 0,
+      });
 
       if (data.status === 'completed') {
-        return saveJob({ ...job, status: 'completed', result: data.result });
+        return saveJob({
+          ...job,
+          status: 'completed',
+          stage: data.stage,
+          progress: data.progress ?? 100,
+          result: data.result,
+        });
       }
       if (data.status === 'failed') {
-        return toDemoJob(job, data.error_message || 'Processing failed');
+        const error = new Error(data.error_message || 'Processing failed');
+        error.jobFailure = true;
+        throw error;
       }
     } catch (err) {
+      if (err.jobFailure) throw err;
       consecutiveErrors++;
       // Backend crashed (out of memory) or unreachable: give up after 3 misses
-      if (consecutiveErrors >= 3) return toDemoJob(job, err.message);
+      if (consecutiveErrors >= 3) {
+        throw new Error(`Could not read processing status: ${err.message}`);
+      }
     }
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
   }
 
-  return toDemoJob(job, 'Processing timed out');
+  throw new Error('Processing timed out before the backend completed the job.');
 };
 
 /**
@@ -149,22 +181,36 @@ export const startProcessing = async () => {
 export const getResults = async () => {
   const job = getJob();
   if (!job) {
-    return { fileName: DEMO_CONFIG.defaultFileName, fileType: 'image/tiff', status: 'Complete' };
+    return {
+      fileName: DEMO_CONFIG.defaultFileName,
+      fileType: 'image/tiff',
+      kind: 'single',
+      status: 'Complete',
+      demoMode: true,
+      glbUrl: DEMO_CONFIG.demoGlb,
+      glbName: DEMO_CONFIG.demoGlbName,
+    };
   }
 
   const result = job.result || {};
+  const derivedAnalysisPath = result.flythrough_path?.replace(/_terrain\.glb$/i, '_analysis.npz');
+  const analysisPath = result.analysis_path || (derivedAnalysisPath !== result.flythrough_path ? derivedAnalysisPath : null);
 
   return {
     fileName: job.fileName,
     fileType: job.fileType,
+    kind: job.kind || 'single',
     status: job.status === 'completed' ? 'Complete' : job.status,
 
     // Set when we fell back to the sample result
     demoMode: !!job.demoMode,
-    notice: job.demoMode ? FALLBACK_NOTICE : null,
+    notice: null,
 
     // Real backend output
     dsmUrl: result.height_map_path ? `${API_BASE}${result.height_map_path}` : null,
+    dsmGeotiffUrl: result.dsm_geotiff_path ? `${API_BASE}${result.dsm_geotiff_path}` : null,
+    beforeDsmGeotiffUrl: result.before_dsm_geotiff_path ? `${API_BASE}${result.before_dsm_geotiff_path}` : null,
+    afterDsmGeotiffUrl: result.after_dsm_geotiff_path ? `${API_BASE}${result.after_dsm_geotiff_path}` : null,
     dsmName: result.height_map_path ? result.height_map_path.split('/').pop() : DEMO_CONFIG.demoDsmName,
     minHeightM: result.min_height_m ?? null,
     maxHeightM: result.max_height_m ?? null,
@@ -174,9 +220,10 @@ export const getResults = async () => {
     errorMean: result.error_mean ?? null,
     correlation: result.correlation ?? null,
 
-    // Flythrough isn't generated server-side yet - falls back to the demo GLB
-    glbUrl: result.flythrough_path ? `${API_BASE}${result.flythrough_path}` : DEMO_CONFIG.demoGlb,
-    glbName: result.flythrough_path ? result.flythrough_path.split('/').pop() : DEMO_CONFIG.demoGlbName,
+    glbUrl: result.flythrough_path ? `${API_BASE}${result.flythrough_path}` : job.demoMode ? DEMO_CONFIG.demoGlb : null,
+    glbName: result.flythrough_path ? result.flythrough_path.split('/').pop() : job.demoMode ? DEMO_CONFIG.demoGlbName : null,
+    analysisUrl: analysisPath ? `${API_BASE}${analysisPath}` : null,
+    glbBeforeUrl: result.before_flythrough_path ? `${API_BASE}${result.before_flythrough_path}` : null,
   };
 };
 

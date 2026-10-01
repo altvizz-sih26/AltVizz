@@ -15,7 +15,6 @@ export default function Layout({ children }) {
           <NavLink to="/results">Results</NavLink>
           <NavLink to="/viewer">Viewer</NavLink>
         </nav>
-        <span className="demo-chip">DEMO MODE</span>
       </header>
       <main>{children}</main>
       <Footer />

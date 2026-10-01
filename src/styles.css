@@ -722,6 +722,29 @@ h2{
   min-height:38px
 }
 
+.artifact-links{
+  display:grid;
+  gap:7px;
+  margin-top:10px
+}
+
+.artifact-links .text-button{
+  display:block;
+  width:100%;
+  padding:9px 10px;
+  border:1px solid var(--line);
+  border-radius:5px;
+  background:rgba(8,27,24,.45);
+  text-align:left;
+  line-height:1.45
+}
+
+.terrain-art-empty span{
+  left:13px;
+  right:auto;
+  max-width:calc(100% - 26px)
+}
+
 .model-preview{
   height:178px;
   background:
@@ -749,6 +772,13 @@ h2{
   line-height:1;
   color:#c5d5ff;
   transform:rotate(-25deg)
+}
+
+.model-preview-empty{
+  background:rgba(8,18,22,.8);
+  color:var(--muted);
+  font:11px 'DM Mono',monospace;
+  letter-spacing:1.2px
 }
 
 .button-row{

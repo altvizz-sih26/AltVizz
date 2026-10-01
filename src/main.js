@@ -37,6 +37,7 @@ const DEFAULT_GRID_STEP = 2;
 // X/Y are the ground plane and Z is elevation.
 // Do NOT rotate the GLB. The camera/controls are configured for Z-up.
 const SOURCE_UP_AXIS = "z";
+const TERRAIN_CLASS_LABELS = ["Urban", "Vegetation", "Bare terrain", "Water", "Shadow", "Unknown"];
 
 // Keep null until backend gives you a real endpoint.
 const BACKEND_ENDPOINT = null;
@@ -2720,11 +2721,10 @@ function extractField(raw, keys) {
 //   confidence_after, elevation_change, class_changed,
 //   combined_confidence, significant_change
 //
-// This file has NO separate slope array and NO categorical terrain
-// class array — only a boolean "did the class change" flag. Slope
-// and Terrain Type will correctly stay unavailable for this file;
-// that's real, not a bug. A single-snapshot analysis file (if one
-// exists) would need those fields added separately.
+// This comparison file has NO separate slope array and NO categorical
+// terrain class array — only a boolean "did the class change" flag.
+// Single-snapshot files also include terrain and confidence arrays;
+// the viewer derives slope from elevation when no slope array exists.
 // ============================================================================
 
 function normalizeGrid(raw) {
@@ -3213,7 +3213,9 @@ function getTerrainDataAt(
   // came from the pipeline.
   const terrainLabel =
     (rawTerrain !== null && rawTerrain !== undefined)
-      ? rawTerrain
+      ? (typeof rawTerrain === "number"
+          ? TERRAIN_CLASS_LABELS[Math.round(rawTerrain)] || `Class ${Math.round(rawTerrain)}`
+          : rawTerrain)
       : (
         typeof slopeValue === "number"
           ? (() => {
@@ -4117,7 +4119,8 @@ function computeRegionStats(rowMin, rowMax, colMin, colMax) {
 
   const cols = terrainData.cols;
 
-  let count = 0;
+  let pointCount = 0;
+  let changeCount = 0;
   let changeSum = 0;
   let changeMin = Infinity;
   let changeMax = -Infinity;
@@ -4134,7 +4137,7 @@ function computeRegionStats(rowMin, rowMax, colMin, colMax) {
 
       if (typeof changeValue === "number") {
 
-        count++;
+        changeCount++;
         changeSum += changeValue;
         changeMin = Math.min(changeMin, changeValue);
         changeMax = Math.max(changeMax, changeValue);
@@ -4142,6 +4145,7 @@ function computeRegionStats(rowMin, rowMax, colMin, colMax) {
 
       if (typeof elevationValue === "number") {
 
+        pointCount++;
         elevationSum += elevationValue;
         elevationCount++;
       }
@@ -4155,19 +4159,19 @@ function computeRegionStats(rowMin, rowMax, colMin, colMax) {
   regionPanelEl.classList.add("has-selection");
 
   if (regionCountEl) {
-    regionCountEl.textContent = String(count);
+    regionCountEl.textContent = String(pointCount);
   }
 
   if (regionAvgChangeEl) {
-    regionAvgChangeEl.textContent = count > 0
-      ? formatValue(changeSum / count, " m")
-      : "---";
+    regionAvgChangeEl.textContent = changeCount > 0
+      ? formatValue(changeSum / changeCount, " m")
+      : "Not available";
   }
 
   if (regionMinMaxChangeEl) {
-    regionMinMaxChangeEl.textContent = count > 0
+    regionMinMaxChangeEl.textContent = changeCount > 0
       ? `${formatValue(changeMin, " m")} / ${formatValue(changeMax, " m")}`
-      : "---";
+      : "Not available";
   }
 
   if (regionAvgElevationEl) {
@@ -4184,12 +4188,12 @@ function computeRegionStats(rowMin, rowMax, colMin, colMax) {
   }
 
   setStatus(
-    `Region selected: ${count} points (rows ${rowMin}-${rowMax}, cols ${colMin}-${colMax})`
+    `Region selected: ${pointCount} points (rows ${rowMin}-${rowMax}, cols ${colMin}-${colMax})`
   );
 
   console.log(
     "[SASA MINE] REGION ANALYSIS",
-    { rowMin, rowMax, colMin, colMax, count, avgChange: count > 0 ? changeSum / count : null }
+    { rowMin, rowMax, colMin, colMax, pointCount, avgChange: changeCount > 0 ? changeSum / changeCount : null }
   );
 }
 
@@ -6381,17 +6385,19 @@ function setupAnalysisSourceSwitcher(sources) {
 
 async function loadConfiguredTerrain() {
 
-    const params = new URLSearchParams(window.location.search);
+  const params = new URLSearchParams(window.location.search);
   const glbParam = params.get("glb");
+  const glbBefore = params.get("glbBefore");
+  const labelParam = params.get("label");
 
   if (!glbParam && viewerInputConfig?.srtmUrl) {
     await loadSRTMMetadata(viewerInputConfig.srtmUrl);
   }
 
   const mesh = glbParam
-    ? { after: glbParam, before: "", twoGlb: false }
+    ? { after: glbParam, before: glbBefore || "", twoGlb: Boolean(glbBefore) }
     : resolveMeshMode(viewerInputConfig);
-  const analysisParam = new URLSearchParams(window.location.search).get("analysis");
+  const analysisParam = params.get("analysis");
 const sources = analysisParam
   ? [{ label: "Analysis", url: analysisParam }]
   : (glbParam ? [] : resolveAnalysisSources(viewerInputConfig));
@@ -6422,7 +6428,7 @@ const sources = analysisParam
     }
 
     const derivedLabel =
-      viewerInputConfig?.metadata?.datasetName || deriveLabelFromUrl(mesh.after);
+      labelParam || viewerInputConfig?.metadata?.datasetName || deriveLabelFromUrl(mesh.after);
 
     const loadedModel = await loadGLBFromURL(mesh.after, derivedLabel);
 

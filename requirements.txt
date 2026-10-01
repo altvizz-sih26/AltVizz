@@ -10,6 +10,7 @@ opencv-python-headless
 numpy
 rasterio
 scipy
+scikit-learn
 
 trimesh
 tifffile

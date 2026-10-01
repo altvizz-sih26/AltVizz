@@ -15,7 +15,7 @@ import json
 import numpy as np
 import rasterio
 
-from elevation_pipeline import generate_elevation, CLASS_NAMES
+from elevation_pipeline import generate_elevation, relative_elevation, CLASS_NAMES
 from confidence import compute_confidence
 from diff_grid import compute_difference_grid
 from fit_methods import fit_terrain_wise, predict_terrain_wise
@@ -517,7 +517,7 @@ def _elevation(height, srtm_path, mask, use_srtm, label):
         print(f"[{label}] in-sample vs SRTM (fit and scored on the same pixels - optimistic): "
               f"corr={meta.get('correlation')}, mean err={meta.get('error_mean')}")
         return elev
-    return np.clip(height, 0.0, None).astype(np.float32)
+    return relative_elevation(np.asarray(height, dtype=np.float32))
 
 
 def apply_noise_floor(diff, k=NOISE_K):

@@ -29,7 +29,12 @@ class Upload(Base):
     content_type = Column(String, nullable=True)
     uploaded_at = Column(DateTime, default=datetime.utcnow)
 
-    jobs = relationship("Job", back_populates="upload", cascade="all, delete-orphan")
+    jobs = relationship(
+        "Job",
+        back_populates="upload",
+        cascade="all, delete-orphan",
+        foreign_keys="Job.upload_id",
+    )
 
 
 class Job(Base):
@@ -38,12 +43,17 @@ class Job(Base):
 
     id = Column(String, primary_key=True, default=gen_uuid)
     upload_id = Column(String, ForeignKey("uploads.id"), nullable=False)
+    after_upload_id = Column(String, ForeignKey("uploads.id"), nullable=True)
+    kind = Column(String, default="single", nullable=False)
     status = Column(Enum(JobStatus), default=JobStatus.PENDING, nullable=False)
+    stage = Column(String, nullable=True)
+    progress = Column(Integer, default=0, nullable=False)
     error_message = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    upload = relationship("Upload", back_populates="jobs")
+    upload = relationship("Upload", back_populates="jobs", foreign_keys=[upload_id])
+    after_upload = relationship("Upload", foreign_keys=[after_upload_id])
     result = relationship("Result", back_populates="job", uselist=False, cascade="all, delete-orphan")
 
 
@@ -56,8 +66,14 @@ class Result(Base):
 
     # Path/URL to generated height map (image or raster file)
     height_map_path = Column(String, nullable=True)
+    dsm_geotiff_path = Column(String, nullable=True)
+    before_dsm_geotiff_path = Column(String, nullable=True)
+    after_dsm_geotiff_path = Column(String, nullable=True)
     # Path/URL to generated 3D flythrough asset (e.g. .mp4, .glb)
     flythrough_path = Column(String, nullable=True)
+    analysis_path = Column(String, nullable=True)
+    before_flythrough_path = Column(String, nullable=True)
+    change_summary = Column(Text, nullable=True)
 
     # Simple summary stats — placeholder until real ML model is wired in
     min_height_m = Column(Float, nullable=True)
