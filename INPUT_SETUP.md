@@ -38,6 +38,14 @@ URL parameters take priority over the local configuration file.
 
 The viewer therefore does not contain a Windows path, local filename, Person 2 folder name, or Person 3 output filename.
 
+## Live upload calibration
+
+- Set `OPENTOPO_API_KEY` in the backend process to allow SRTM auto-fetch for georeferenced uploads.
+- For PNG/JPG or other imagery without CRS metadata, provide either an SRTM/DEM GeoTIFF or all three location values: centre latitude, centre longitude, and the image ground width in metres.
+- Without a supplied reference or location, the result is relative and not metric; the results page labels it accordingly.
+- Fetched and aligned SRTM files are stored under `app/results`.
+- `VITE_ENABLE_DEMO_FALLBACK` defaults to off. Set it to `true` only to explicitly allow sample results when no live job exists.
+
 ## Important source-data limitation
 
 The supplied Person 2 NPZ contains no explicit terrain-type array and no explicit slope array.

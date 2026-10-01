@@ -44,7 +44,8 @@ import cv2
 import numpy as np
 import rasterio
 import torch
-from rasterio.warp import Resampling, reproject, transform_bounds
+from pyproj import Geod
+from rasterio.warp import Resampling, reproject, transform as transform_coordinates, transform_bounds
 
 # --- make the sibling folders importable -----------------------------
 SIH_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -111,22 +112,67 @@ def _get_model() -> DepthAnythingV2:
     return _model
 
 
-def _auto_fetch_srtm(image_path: str) -> str | None:
+def _auto_fetch_srtm(
+    image_path: str,
+    center_lat: float | None = None,
+    center_lon: float | None = None,
+    ground_width_m: float | None = None,
+) -> tuple[str | None, str]:
     """
     Tries to automatically get a matching SRTM reference for this upload
     using Person 5's generic process_new_image.py, instead of requiring the
     caller to pass srtm_path manually.
 
-    Returns the aligned SRTM path on success, or None if it can't be fetched
-    (e.g. the image has no georeferencing, or the SRTM download fails/network
-    is unavailable) - falling back to relative/uncalibrated mode, same as
-    before, rather than crashing the whole pipeline.
+    Returns the aligned SRTM path and a user-visible status.
     """
     try:
-        return process_new_image(image_path)
+        path = process_new_image(
+            image_path,
+            output_dir=RESULTS_DIR,
+            center_lat=center_lat,
+            center_lon=center_lon,
+            ground_width_m=ground_width_m,
+        )
+        return path, "SRTM reference downloaded and aligned"
     except Exception as e:
-        print(f"[depth_pipeline] SRTM auto-fetch skipped for {image_path}: {e}")
-        return None
+        reason = f"SRTM unavailable: {e}"
+        _logger.warning("%s (input %s)", reason, image_path)
+        return None, reason
+
+
+def _pixel_size_m(
+    image_path: str,
+    ground_width_m: float | None = None,
+) -> tuple[float, float] | None:
+    with rasterio.open(image_path) as source:
+        if source.crs is None:
+            if ground_width_m is not None:
+                pixel_width = ground_width_m / source.width
+                return float(pixel_width), float(pixel_width)
+            return None
+
+        col, row = source.width / 2, source.height / 2
+        x0, y0 = source.transform * (col, row)
+        x1, y1 = source.transform * (col + 1, row)
+        x2, y2 = source.transform * (col, row + 1)
+
+        if source.crs.is_projected:
+            unit_to_m = source.crs.linear_units_factor[1]
+            return (
+                float(np.hypot(x1 - x0, y1 - y0) * unit_to_m),
+                float(np.hypot(x2 - x0, y2 - y0) * unit_to_m),
+            )
+
+        xs, ys = transform_coordinates(
+            source.crs,
+            "EPSG:4326",
+            [x0, x1, x2],
+            [y0, y1, y2],
+        )
+        geod = Geod(ellps="WGS84")
+        width_m = abs(geod.inv(xs[0], ys[0], xs[1], ys[1])[2])
+        height_m = abs(geod.inv(xs[0], ys[0], xs[2], ys[2])[2])
+        return float(width_m), float(height_m)
 
 
 def _prepare_glb_texture(image_path: str, base_name: str) -> tuple[str, str | None]:
@@ -150,26 +196,33 @@ def _prepare_glb_texture(image_path: str, base_name: str) -> tuple[str, str | No
     return texture_path, texture_path
 
 
-def _try_generate_glb(elevation: np.ndarray, image_path: str, base_name: str) -> str | None:
+def _try_generate_glb(
+    elevation: np.ndarray,
+    image_path: str,
+    base_name: str,
+    pixel_size_m: tuple[float, float] | None = None,
+) -> str:
     """
     Builds the textured 3D mesh (Person 3's create_terrain.py, now a
     reusable function) from the elevation this pipeline just computed.
 
-    Returns the GLB's public path on success, or None if mesh generation
-    fails for any reason (e.g. bad image format) - the rest of the result
-    (heightmap, DSM stats) still gets returned either way, same pattern as
-    the SRTM auto-fetch fallback above.
+    Raises on failure so the job cannot be marked complete without its 3D model.
     """
     texture_path = None
     try:
         glb_filename = f"{base_name}_terrain.glb"
         glb_full_path = os.path.join(RESULTS_DIR, glb_filename)
         texture_image_path, texture_path = _prepare_glb_texture(image_path, base_name)
-        generate_glb(elevation, texture_image_path, glb_full_path)
+        generate_glb(
+            elevation,
+            texture_image_path,
+            glb_full_path,
+            pixel_size_m=pixel_size_m,
+        )
         return f"/static/results/{glb_filename}"
     except Exception as e:
-        print(f"[depth_pipeline] GLB mesh generation failed for {image_path}: {e}")
-        return None
+        _logger.exception("GLB mesh generation failed for %s", image_path)
+        raise RuntimeError(f"3D mesh generation failed: {e}") from e
     finally:
         if texture_path and os.path.exists(texture_path):
             os.remove(texture_path)
@@ -282,7 +335,9 @@ def _save_analysis_npz(
     base_name: str,
     terrain_mask: np.ndarray | None = None,
     confidence: np.ndarray | None = None,
-) -> str | None:
+    mode: str | None = None,
+    srtm_status: str | None = None,
+) -> str:
     """
     NEW: Saves the elevation grid as <base_name>_analysis.npz next to the GLB,
     so the 3D viewer can build the Analysis Map, slope and region statistics
@@ -294,9 +349,7 @@ def _save_analysis_npz(
     `elevation_after` would leave the maps empty. A single upload has no
     "before" snapshot.
 
-    Never raises: if saving fails, the rest of the pipeline result is still
-    returned and the viewer simply shows the mesh without analytics.
-    Returns the public path on success, or None on failure.
+    Raises on failure so a completed job always has its analysis file.
     """
     try:
         elev = np.asarray(elevation, dtype=np.float32)
@@ -321,13 +374,17 @@ def _save_analysis_npz(
                     interpolation=cv2.INTER_NEAREST if name == "terrain" else cv2.INTER_AREA,
                 )
             arrays[name] = values
+        if mode is not None:
+            arrays["mode"] = np.array(mode)
+        if srtm_status is not None:
+            arrays["srtm_status"] = np.array(srtm_status)
 
         npz_filename = f"{base_name}_analysis.npz"
         np.savez_compressed(os.path.join(RESULTS_DIR, npz_filename), **arrays)
         return f"/static/results/{npz_filename}"
     except Exception as e:
-        print(f"[depth_pipeline] analysis npz failed for {base_name}: {e}")
-        return None
+        _logger.exception("Analysis NPZ generation failed for %s", base_name)
+        raise RuntimeError(f"Analysis file generation failed: {e}") from e
 
 
 def _save_dsm_geotiff(elevation: np.ndarray, image_path: str, base_name: str) -> str | None:
@@ -357,10 +414,24 @@ def _save_dsm_geotiff(elevation: np.ndarray, image_path: str, base_name: str) ->
     return f"/static/results/{filename}"
 
 
+def _normalize_depth(depth: np.ndarray) -> np.ndarray:
+    depth = np.asarray(depth, dtype=np.float32)
+    finite = np.isfinite(depth)
+    if not finite.any():
+        raise ValueError("Depth model returned no finite values")
+    lower, upper = np.percentile(depth[finite], [1, 99])
+    if upper <= lower:
+        return np.zeros_like(depth, dtype=np.float32)
+    return np.clip((depth - lower) / (upper - lower), 0, 1).astype(np.float32)
+
+
 def reconstruct(
     image_path: str,
     srtm_path: str | None = None,
     progress=lambda stage, pct: None,
+    center_lat: float | None = None,
+    center_lon: float | None = None,
+    ground_width_m: float | None = None,
 ) -> dict:
     """
     Reconstructs elevation and 3D artifacts for one uploaded image:
@@ -389,15 +460,21 @@ def reconstruct(
 
     started = time.perf_counter()
     progress("SRTM Reference", 10)
-    if srtm_path is None:
-        srtm_path = _auto_fetch_srtm(image_path)
+    if srtm_path is not None:
+        srtm_status = "SRTM reference file supplied"
+    else:
+        srtm_path, srtm_status = _auto_fetch_srtm(
+            image_path,
+            center_lat=center_lat,
+            center_lon=center_lon,
+            ground_width_m=ground_width_m,
+        )
     _logger.info("SRTM Reference completed in %.3f seconds", time.perf_counter() - started)
 
     started = time.perf_counter()
     progress("Depth Estimation", 15)
     model = _get_model()
-    depth = model.infer_image(raw_image)
-    depth = (depth - depth.min()) / (depth.max() - depth.min())  # normalize 0-1, matches person2's format contract
+    depth = _normalize_depth(model.infer_image(raw_image))
     _logger.info("Depth Estimation completed in %.3f seconds", time.perf_counter() - started)
 
     started = time.perf_counter()
@@ -425,7 +502,12 @@ def reconstruct(
 
     started = time.perf_counter()
     progress("Building 3D Mesh", 90)
-    glb_url = _try_generate_glb(elevation, image_path, base_name)
+    glb_url = _try_generate_glb(
+        elevation,
+        image_path,
+        base_name,
+        _pixel_size_m(image_path, ground_width_m),
+    )
     _logger.info("Building 3D Mesh completed in %.3f seconds", time.perf_counter() - started)
 
     return {
@@ -435,6 +517,7 @@ def reconstruct(
         "meta": metadata,
         "base_name": base_name,
         "srtm_path": srtm_path,
+        "srtm_status": srtm_status,
         "heightmap_url": heightmap_url,
         "dsm_geotiff_url": dsm_geotiff_url,
         "glb_url": glb_url,
@@ -445,12 +528,22 @@ def run_pipeline(
     image_path: str,
     srtm_path: str | None = None,
     progress=lambda stage, pct: None,
+    center_lat: float | None = None,
+    center_lon: float | None = None,
+    ground_width_m: float | None = None,
 ) -> dict:
     """Runs reconstruction and returns the existing Result-model fields.
 
     The analysis NPZ continues to store its grid under the `elevation` key.
     """
-    result = reconstruct(image_path, srtm_path, progress)
+    result = reconstruct(
+        image_path,
+        srtm_path,
+        progress,
+        center_lat=center_lat,
+        center_lon=center_lon,
+        ground_width_m=ground_width_m,
+    )
     elevation = result["elevation"]
     metadata = result["meta"]
 
@@ -460,7 +553,18 @@ def run_pipeline(
         result["base_name"],
         terrain_mask=result["terrain_mask"],
         confidence=compute_confidence(result["terrain_mask"], class_names=CLASS_NAMES),
+        mode=metadata["mode"],
+        srtm_status=result["srtm_status"],
     )
+
+    fit_report = metadata["fit_report"]
+    if isinstance(fit_report, dict):
+        fit_report = {**fit_report, "srtm_status": result["srtm_status"]}
+    else:
+        fit_report = {
+            "calibration": fit_report,
+            "srtm_status": result["srtm_status"],
+        }
 
     return {
         "height_map_path": result["heightmap_url"],
@@ -475,7 +579,7 @@ def run_pipeline(
         "error_max": metadata["error_max"],
         "correlation": metadata["correlation"],
         "artifact_pixels": metadata["artifact_pixels"],
-        "fit_report": json.dumps(metadata["fit_report"], default=float) if metadata["fit_report"] is not None else None,
+        "fit_report": json.dumps(fit_report, default=float),
     }
 
 
@@ -484,6 +588,9 @@ def run_compare_pipeline(
     after_path: str,
     srtm_path: str | None = None,
     progress=lambda stage, pct: None,
+    center_lat: float | None = None,
+    center_lon: float | None = None,
+    ground_width_m: float | None = None,
 ) -> dict:
     """Reconstructs and compares a before/after image pair."""
     def before_progress(stage, pct):
@@ -492,7 +599,14 @@ def run_compare_pipeline(
     def after_progress(stage, pct):
         progress(f"After: {stage}", 45 + round(pct * 0.4))
 
-    before = reconstruct(before_path, srtm_path, before_progress)
+    before = reconstruct(
+        before_path,
+        srtm_path,
+        before_progress,
+        center_lat=center_lat,
+        center_lon=center_lon,
+        ground_width_m=ground_width_m,
+    )
     progress("Aligning After Image", 42)
     aligned_after_path = align_after_to_before(before_path, after_path)
     after = reconstruct(aligned_after_path, before["srtm_path"], after_progress)
@@ -512,12 +626,14 @@ def run_compare_pipeline(
     progress("Saving Comparison", 95)
     save_for_person4(comparison, comparison_name, out_dir=RESULTS_DIR)
     change_summary = summarize_difference_grid(comparison["diff_grid"])
+    change_summary["srtm_status"] = before["srtm_status"]
     progress("Comparison Complete", 100)
 
     return {
         "analysis_path": f"/static/results/{comparison_name}.npz",
         "change_summary": change_summary,
         "mode": comparison["mode"],
+        "srtm_status": before["srtm_status"],
         "calibration_mode": "srtm_calibrated" if use_srtm else "relative",
         "metrics_before": comparison["metrics_before"],
         "metrics_after": comparison["metrics_after"],

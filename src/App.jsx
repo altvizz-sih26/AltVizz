@@ -71,6 +71,10 @@ function Home() {
 function Upload() {
   const nav = useNavigate();
   const [file, setFile] = useState(null);
+  const [srtmFile, setSrtmFile] = useState(null);
+  const [centerLat, setCenterLat] = useState('');
+  const [centerLon, setCenterLon] = useState('');
+  const [groundWidthM, setGroundWidthM] = useState('');
   const [error, setError] = useState('');
   const [drag, setDrag] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -86,13 +90,32 @@ function Upload() {
     setFile(f);
   };
 
+  const pickSrtm = f => {
+    if (!f) return;
+    if (!['tif', 'tiff'].includes(f.name.split('.').pop().toLowerCase())) {
+      setError('Please select a GeoTIFF (.tif or .tiff) for SRTM reference data.');
+      return;
+    }
+    setError('');
+    setSrtmFile(f);
+  };
+
   // Upload, then navigate immediately to /processing, which owns waiting
   // for the real result (with a visible loading state).
   const go = async () => {
+    const locationValues = [centerLat, centerLon, groundWidthM];
+    if (locationValues.some(Boolean) && !locationValues.every(Boolean)) {
+      setError('Enter latitude, longitude, and ground width together, or leave all three blank.');
+      return;
+    }
     setUploading(true);
     setError('');
     try {
-      await uploadImage(file);
+      await uploadImage(file, srtmFile, locationValues.every(Boolean) ? {
+        centerLat: Number(centerLat),
+        centerLon: Number(centerLon),
+        groundWidthM: Number(groundWidthM),
+      } : null);
       nav('/processing');
     } catch (err) {
       setError(err.message || 'Upload failed. Please try again.');
@@ -100,13 +123,17 @@ function Upload() {
     }
   };
 
-  return <Layout><section className="page narrow"><p className="eyebrow">STEP 01 / INPUT</p><h1>Upload satellite imagery.</h1><p className="lede">Upload a single optical satellite or remote-sensing image to begin the demo reconstruction.</p><label className={'dropzone ' + (drag ? 'dragging' : '')} onDragOver={e => { e.preventDefault(); setDrag(true) }} onDragLeave={() => setDrag(false)} onDrop={e => { e.preventDefault(); setDrag(false); pick(e.dataTransfer.files[0]) }}><input type="file" accept=".png,.jpg,.jpeg,.tiff,.tif" onChange={e => pick(e.target.files[0])} /><div className="upload-icon">⇧</div><b>Drop your image here</b><span>or <u>browse files</u></span><small>PNG, JPG, JPEG, TIFF or TIF · one image only</small></label>{error && <p className="error">{error}</p>}{file && <div className="file-card">{file.type.startsWith('image/') && !/tiff/i.test(file.name) && <img src={URL.createObjectURL(file)} alt="Selected satellite preview" />}<div><p className="eyebrow">SELECTED INPUT</p><b>{file.name}</b><small>{file.type || 'Image file'} · {(file.size / 1024 / 1024).toFixed(2)} MB</small>{/tiff/i.test(file.name) && <small>TIFF selected — browser preview unavailable; it will be preserved for processing.</small>}</div><button onClick={() => setFile(null)} className="text-button">Remove</button></div>}<div className="actions right"><button disabled={!file || uploading} onClick={go} className="button primary">{uploading ? 'Uploading…' : <>Start Processing <Arrow /></>}</button></div></section></Layout>;
+  return <Layout><section className="page narrow"><p className="eyebrow">STEP 01 / INPUT</p><h1>Upload satellite imagery.</h1><p className="lede">Upload a single optical satellite or remote-sensing image to begin terrain reconstruction.</p><label className={'dropzone ' + (drag ? 'dragging' : '')} onDragOver={e => { e.preventDefault(); setDrag(true) }} onDragLeave={() => setDrag(false)} onDrop={e => { e.preventDefault(); setDrag(false); pick(e.dataTransfer.files[0]) }}><input type="file" accept=".png,.jpg,.jpeg,.tiff,.tif" onChange={e => pick(e.target.files[0])} /><div className="upload-icon">⇧</div><b>Drop your image here</b><span>or <u>browse files</u></span><small>PNG, JPG, JPEG, TIFF or TIF · one image only</small></label><label className="dropzone"><input type="file" accept=".tif,.tiff" onChange={e => pickSrtm(e.target.files[0])} /><div className="upload-icon">⇧</div><b>Optional SRTM/DEM GeoTIFF reference</b><span>or <u>browse files</u></span><small>Without this or a location, output stays relative and is not metric.</small></label>{srtmFile && <div className="file-card"><div><p className="eyebrow">SRTM REFERENCE</p><b>{srtmFile.name}</b></div><button onClick={() => setSrtmFile(null)} className="text-button">Remove</button></div>}<div className="field-row"><label>Center latitude<input type="number" min="-90" max="90" step="any" value={centerLat} onChange={e => setCenterLat(e.target.value)} /></label><label>Center longitude<input type="number" min="-180" max="180" step="any" value={centerLon} onChange={e => setCenterLon(e.target.value)} /></label><label>Ground width (metres)<input type="number" min="1" step="any" value={groundWidthM} onChange={e => setGroundWidthM(e.target.value)} /></label></div>{error && <p className="error">{error}</p>}{file && <div className="file-card">{file.type.startsWith('image/') && !/tiff/i.test(file.name) && <img src={URL.createObjectURL(file)} alt="Selected satellite preview" />}<div><p className="eyebrow">SELECTED INPUT</p><b>{file.name}</b><small>{file.type || 'Image file'} · {(file.size / 1024 / 1024).toFixed(2)} MB</small>{/tiff/i.test(file.name) && <small>TIFF selected — browser preview unavailable; it will be preserved for processing.</small>}</div><button onClick={() => setFile(null)} className="text-button">Remove</button></div>}<div className="actions right"><button disabled={!file || uploading} onClick={go} className="button primary">{uploading ? 'Uploading…' : <>Start Processing <Arrow /></>}</button></div></section></Layout>;
 }
 
 function CompareUpload() {
   const nav = useNavigate();
   const [before, setBefore] = useState(null);
   const [after, setAfter] = useState(null);
+  const [srtmFile, setSrtmFile] = useState(null);
+  const [centerLat, setCenterLat] = useState('');
+  const [centerLon, setCenterLon] = useState('');
+  const [groundWidthM, setGroundWidthM] = useState('');
   const [error, setError] = useState('');
   const [dragBefore, setDragBefore] = useState(false);
   const [dragAfter, setDragAfter] = useState(false);
@@ -123,11 +150,30 @@ function CompareUpload() {
     which === 'before' ? setBefore(f) : setAfter(f);
   };
 
+  const pickSrtm = f => {
+    if (!f) return;
+    if (!['tif', 'tiff'].includes(f.name.split('.').pop().toLowerCase())) {
+      setError('Please select a GeoTIFF (.tif or .tiff) for SRTM reference data.');
+      return;
+    }
+    setError('');
+    setSrtmFile(f);
+  };
+
   const go = async () => {
+    const locationValues = [centerLat, centerLon, groundWidthM];
+    if (locationValues.some(Boolean) && !locationValues.every(Boolean)) {
+      setError('Enter latitude, longitude, and ground width together, or leave all three blank.');
+      return;
+    }
     setUploading(true);
     setError('');
     try {
-      await uploadComparison(before, after);
+      await uploadComparison(before, after, srtmFile, locationValues.every(Boolean) ? {
+        centerLat: Number(centerLat),
+        centerLon: Number(centerLon),
+        groundWidthM: Number(groundWidthM),
+      } : null);
       nav('/processing');
     } catch (err) {
       setError(err.message || 'Comparison upload failed. Please try again.');
@@ -182,6 +228,16 @@ function CompareUpload() {
             {fileCard(after, 'after', setAfter)}
           </div>
         </div>
+
+        <label className="dropzone">
+          <input type="file" accept=".tif,.tiff" onChange={e => pickSrtm(e.target.files[0])} />
+          <div className="upload-icon">⇧</div>
+          <b>Optional shared SRTM/DEM GeoTIFF reference</b>
+          <span>or <u>browse files</u></span>
+          <small>The same reference is used for both images. Without it or a location, heights stay relative and non-metric.</small>
+        </label>
+        {srtmFile && <div className="file-card"><div><p className="eyebrow">SRTM REFERENCE</p><b>{srtmFile.name}</b></div><button onClick={() => setSrtmFile(null)} className="text-button">Remove</button></div>}
+        <div className="field-row"><label>Center latitude<input type="number" min="-90" max="90" step="any" value={centerLat} onChange={e => setCenterLat(e.target.value)} /></label><label>Center longitude<input type="number" min="-180" max="180" step="any" value={centerLon} onChange={e => setCenterLon(e.target.value)} /></label><label>Ground width (metres)<input type="number" min="1" step="any" value={groundWidthM} onChange={e => setGroundWidthM(e.target.value)} /></label></div>
 
         {error && <p className="error">{error}</p>}
 
@@ -240,13 +296,14 @@ function Processing() {
 
 // Shows the REAL generated height map when available; falls back to the
 // decorative placeholder art only if no real result exists yet.
-function TerrainArt({ dsmUrl, minHeightM, maxHeightM, comparison = false }) {
+function TerrainArt({ dsmUrl, minHeightM, maxHeightM, calibrationMode, comparison = false }) {
+  const heightUnit = calibrationMode === 'relative' ? 'relative units' : 'm';
   if (dsmUrl) {
     return (
       <div className="terrain-art" aria-label="Generated DSM elevation visualization">
         <img src={dsmUrl} alt="Generated height map" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: 'inherit' }} />
-        {maxHeightM != null && <span>HIGH · {maxHeightM.toFixed(1)}m</span>}
-        {minHeightM != null && <small>LOW · {minHeightM.toFixed(1)}m</small>}
+        {maxHeightM != null && <span>HIGH · {maxHeightM.toFixed(1)} {heightUnit}</span>}
+        {minHeightM != null && <small>LOW · {minHeightM.toFixed(1)} {heightUnit}</small>}
       </div>
     );
   }
@@ -262,8 +319,9 @@ function Results() {
   const nav = useNavigate();
   const [modal, setModal] = useState('');
   const [data, setData] = useState(null);
+  const [loadError, setLoadError] = useState('');
 
-  useEffect(() => { getResults().then(setData); }, []);
+  useEffect(() => { getResults().then(setData).catch(err => setLoadError(err.message)); }, []);
 
   const fresh = () => { clearDemoJob(); nav('/upload'); };
 
@@ -275,6 +333,10 @@ function Results() {
     (data?.dsmUrl || data?.dsmGeotiffUrl || data?.beforeDsmGeotiffUrl || data?.afterDsmGeotiffUrl) && 'DSM',
     data?.glbUrl && 'GLB',
   ].filter(Boolean).join(' + ') || 'No output artifacts';
+
+  if (loadError) {
+    return <Layout><section className="page narrow"><p className="eyebrow">OUTPUT</p><h1>No job result available.</h1><p className="error">{loadError}</p><button className="button primary" onClick={() => nav('/upload')}>← Start a new upload</button></section></Layout>;
+  }
 
   return <Layout><section className="page"><p className="eyebrow">OUTPUT</p><h1>{data?.kind === 'compare' ? 'Comparison Complete.' : 'Reconstruction Complete.'}</h1><p className="lede">{data?.kind === 'compare' ? 'Before and after terrain outputs are ready to inspect.' : 'Your terrain package is ready to inspect and explore.'}</p><div className="input-line"><span>{data?.kind === 'compare' ? 'BEFORE / AFTER' : 'INPUT IMAGE'}</span><b>{data?.fileName || DEMO_CONFIG.defaultFileName}</b><i>{data?.fileType || 'image/tiff'}</i></div>
 
@@ -288,21 +350,22 @@ function Results() {
     {/* CHANGED: only show the uncalibrated warning for real (non-demo) results */}
     {isUncalibrated && data && !data.demoMode && data.kind !== 'compare' && (
       <p className="error" style={{ marginBottom: '1rem' }}>
-        ⚠ No reference elevation data (SRTM) was provided for this upload — the height values below are an uncalibrated estimate, not real-world elevation.
+        ⚠ {data.srtmStatus || 'SRTM unavailable. Heights are relative and not metric.'}
       </p>
     )}
+    {data?.srtmStatus && !isUncalibrated && <p className="demo-note">{data.srtmStatus}</p>}
     {relativeComparison && (
-      <p className="demo-note">No SRTM reference was used. Comparison elevations are relative estimates, not absolute real-world heights.</p>
+      <p className="demo-note">{data.srtmStatus || 'No SRTM reference was used. Comparison elevations are relative estimates, not absolute real-world heights.'}</p>
     )}
 
     <div className="results-grid">
       <article className="result-card">
-        <TerrainArt dsmUrl={data?.dsmUrl} minHeightM={data?.minHeightM} maxHeightM={data?.maxHeightM} comparison={data?.kind === 'compare'} />
+        <TerrainArt dsmUrl={data?.dsmUrl} minHeightM={data?.minHeightM} maxHeightM={data?.maxHeightM} calibrationMode={data?.calibrationMode} comparison={data?.kind === 'compare'} />
         <div className="card-copy">
           <p className="eyebrow">ELEVATION / DSM</p>
           <h2>{data?.kind === 'compare' ? 'Before / after DSMs' : 'Digital Surface Model'}</h2>
           {data?.meanHeightM != null
-            ? <p>Mean height: {data.meanHeightM.toFixed(1)}m {data.calibrationMode && `· mode: ${data.calibrationMode}`}{data.correlation != null && ` · fit correlation: ${data.correlation.toFixed(2)}`}</p>
+            ? <p>Mean height: {data.meanHeightM.toFixed(1)} {data.calibrationMode === 'relative' ? 'relative units' : 'm'} {data.calibrationMode && `· mode: ${data.calibrationMode}`}{data.correlation != null && ` · fit correlation: ${data.correlation.toFixed(2)}`}</p>
             : <p>{data?.kind === 'compare' ? 'GeoTIFF exports are available below. No raster preview was generated.' : 'Terrain-relative elevation visualisation generated for this output.'}</p>
           }
           {data?.dsmUrl && <button className="button secondary" onClick={() => setModal('dsm')}>View DSM</button>}
@@ -339,7 +402,7 @@ function Results() {
       </article>
     </div>
     <button className="text-button back" onClick={fresh}>← Upload New Image</button>
-  </section>{modal && <div className="modal-backdrop" onMouseDown={() => setModal('')}><div className="modal" onMouseDown={e => e.stopPropagation()}><button className="close" onClick={() => setModal('')}>×</button>{modal === 'dsm' ? <><TerrainArt dsmUrl={data?.dsmUrl} minHeightM={data?.minHeightM} maxHeightM={data?.maxHeightM} /><h2>Digital Surface Model</h2><p>{data?.demoMode ? 'Sample result — live processing was unavailable.' : isUncalibrated ? 'Uncalibrated estimate — no reference elevation data was used.' : `Calibrated against real elevation data (${data?.calibrationMode} mode).`}</p></> : <><div className="model-preview big">GLB</div><h2>GLB Terrain Output</h2><p>{data?.glbUrl ? 'This GLB is ready for download or exploration in the interactive viewer.' : 'Real mesh generation isn\u2019t built server-side yet — showing a demo terrain mesh instead.'}</p><div className="actions"><button className="button primary" onClick={downloadResult}>Download GLB</button></div></>}</div></div>}</Layout>;
+  </section>{modal && <div className="modal-backdrop" onMouseDown={() => setModal('')}><div className="modal" onMouseDown={e => e.stopPropagation()}><button className="close" onClick={() => setModal('')}>×</button>{modal === 'dsm' ? <><TerrainArt dsmUrl={data?.dsmUrl} minHeightM={data?.minHeightM} maxHeightM={data?.maxHeightM} calibrationMode={data?.calibrationMode} /><h2>Digital Surface Model</h2><p>{data?.demoMode ? 'Sample result — live processing was unavailable.' : isUncalibrated ? 'Uncalibrated estimate — no reference elevation data was used.' : `Calibrated against real elevation data (${data?.calibrationMode} mode).`}</p></> : <><div className="model-preview big">GLB</div><h2>GLB Terrain Output</h2><p>{data?.glbUrl ? 'This GLB is ready for download or exploration in the interactive viewer.' : 'No 3D mesh was generated for this job.'}</p><div className="actions"><button className="button primary" onClick={downloadResult}>Download GLB</button></div></>}</div></div>}</Layout>;
 }
 
 const viewerHref = d => {

@@ -20,6 +20,9 @@ def run_height_estimation(
     image_path: str,
     srtm_path: str | None = None,
     progress=lambda stage, pct: None,
+    center_lat: float | None = None,
+    center_lon: float | None = None,
+    ground_width_m: float | None = None,
 ) -> dict:
     """
     Runs the real height-estimation pipeline on an uploaded image.
@@ -33,4 +36,11 @@ def run_height_estimation(
 
     Returns a dict matching the Result model's fields.
     """
-    return run_pipeline(image_path, srtm_path=srtm_path, progress=progress)
+    return run_pipeline(
+        image_path,
+        srtm_path=srtm_path,
+        progress=progress,
+        center_lat=center_lat,
+        center_lon=center_lon,
+        ground_width_m=ground_width_m,
+    )

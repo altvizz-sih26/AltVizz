@@ -27,8 +27,9 @@ def generate_glb(
     image_path: str,
     output_path: str,
     step: int = 2,
-    vertical_exaggeration: float = 1.5,
-    smooth_sigma: float = 1.2,
+    vertical_exaggeration: float = 1.0,
+    smooth_sigma: float = 0.5,
+    pixel_size_m: tuple[float, float] | None = None,
 ) -> str:
     """
     Builds a textured 3D terrain mesh from an elevation array + its source
@@ -41,6 +42,7 @@ def generate_glb(
         step: Downsampling stride.
         vertical_exaggeration: Multiplier for visual height exaggeration.
         smooth_sigma: Gaussian smoothing applied to elevation.
+        pixel_size_m: Source-pixel width and height in metres, when known.
 
     Returns:
         output_path, on success.
@@ -120,8 +122,9 @@ def generate_glb(
     ) * vertical_exaggeration
 
     # --- Create grid -----------------------------------------------------
-    x = np.arange(W) - (W - 1) / 2
-    y = np.arange(H) - (H - 1) / 2
+    pixel_width, pixel_height = pixel_size_m or (1.0, 1.0)
+    x = (np.arange(W) - (W - 1) / 2) * pixel_width * step
+    y = (np.arange(H) - (H - 1) / 2) * pixel_height * step
 
     X, Y = np.meshgrid(x, -y)
     Z = relative_height

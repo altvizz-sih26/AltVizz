@@ -565,6 +565,7 @@ def run_before_during(h_before, h_after, mask_before=None, mask_after=None,
 
     return {"elevation_before": elev_b, "elevation_after": elev_a,
             "confidence_before": conf_b, "confidence_after": conf_a,
+            "terrain_before": mask_before, "terrain_after": mask_after,
             "diff_grid": diff, "mode": "srtm_calibrated" if use_srtm else "height_above_ground_m",
             "metrics_before": metrics_b, "metrics_after": metrics_a}
 
@@ -572,11 +573,14 @@ def run_before_during(h_before, h_after, mask_before=None, mask_after=None,
 def save_for_person4(result, sample_id, out_dir="person2_elevation/diff_output"):
     Path(out_dir).mkdir(parents=True, exist_ok=True)
     d = result["diff_grid"]
-    np.savez(Path(out_dir) / f"{sample_id}.npz",
+    output_path = Path(out_dir) / f"{sample_id}.npz"
+    np.savez(output_path,
              elevation_before=result["elevation_before"],
              elevation_after=result["elevation_after"],
              confidence_before=result["confidence_before"],
              confidence_after=result["confidence_after"],
+             terrain=result["terrain_before"],
+             terrain_after=result["terrain_after"],
              elevation_change=d["elevation_change"],
              class_changed=d["class_changed"],
              combined_confidence=d["combined_confidence"],
@@ -590,6 +594,7 @@ def save_for_person4(result, sample_id, out_dir="person2_elevation/diff_output")
              metrics_before=np.array(json.dumps(_to_native(result["metrics_before"]))),
              metrics_after=np.array(json.dumps(_to_native(result["metrics_after"]))))
     print(f"Saved {sample_id}.npz to {out_dir}")
+    return str(output_path)
 
 
 if __name__ == "__main__":

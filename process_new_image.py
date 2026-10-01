@@ -19,6 +19,9 @@ import sys
 import os
 import requests
 import rasterio
+from rasterio.crs import CRS
+from rasterio.io import MemoryFile
+from rasterio.transform import from_bounds
 from rasterio.warp import transform_bounds, reproject, Resampling
 import numpy as np
 
@@ -43,6 +46,10 @@ def get_image_bounds_wgs84(image_path):
 
 def download_srtm(lon_min, lat_min, lon_max, lat_max, out_path):
     """Step 2: download SRTM covering exactly this bounding box."""
+    api_key = os.getenv("OPENTOPO_API_KEY", API_KEY).strip()
+    if not api_key:
+        raise RuntimeError("SRTM unavailable: OPENTOPO_API_KEY is not configured")
+
     print(f"Downloading SRTM for bounds: {lon_min:.4f}, {lat_min:.4f}, {lon_max:.4f}, {lat_max:.4f}")
     url = "https://portal.opentopography.org/API/globaldem"
     params = {
@@ -52,26 +59,46 @@ def download_srtm(lon_min, lat_min, lon_max, lat_max, out_path):
         "west": lon_min,
         "east": lon_max,
         "outputFormat": "GTiff",
-        "API_Key": API_KEY,
+        "API_Key": api_key,
     }
-    r = requests.get(url, params=params)
-    if r.status_code == 200 and len(r.content) > 1000:
-        with open(out_path, "wb") as f:
-            f.write(r.content)
-        print(f"Saved raw SRTM: {out_path} ({len(r.content)} bytes)")
-        return out_path
-    else:
-        raise RuntimeError(f"SRTM download failed: status={r.status_code}\n{r.text[:500]}")
+    response = requests.get(url, params=params, timeout=(10, 90))
+    if response.status_code != 200:
+        raise RuntimeError(
+            f"SRTM unavailable: OpenTopography returned HTTP {response.status_code}: "
+            f"{response.text[:500]}"
+        )
+    if len(response.content) <= 1000:
+        raise RuntimeError("SRTM unavailable: OpenTopography returned an empty response")
+
+    try:
+        with MemoryFile(response.content) as memory_file:
+            with memory_file.open() as dataset:
+                if dataset.count < 1 or dataset.crs is None:
+                    raise ValueError("response has no raster band or coordinate system")
+                dataset.read(1, window=((0, 1), (0, 1)))
+    except Exception as error:
+        raise RuntimeError(f"SRTM unavailable: response was not a valid GeoTIFF: {error}") from error
+
+    with open(out_path, "wb") as output:
+        output.write(response.content)
+    print(f"Saved raw SRTM: {out_path} ({len(response.content)} bytes)")
+    return out_path
 
 
-def align_srtm_to_image(image_path, srtm_path, out_path):
+def align_srtm_to_image(image_path, srtm_path, out_path, bounds_wgs84=None):
     """Step 3: reproject SRTM onto the image's exact pixel grid, with proper
     nodata handling (this part was already generic — works for any image)."""
     with rasterio.open(image_path) as ref:
-        ref_crs = ref.crs
-        ref_transform = ref.transform
         ref_width = ref.width
         ref_height = ref.height
+        if bounds_wgs84 is None:
+            ref_crs = ref.crs
+            ref_transform = ref.transform
+            if ref_crs is None:
+                raise ValueError(f"{image_path} has no CRS; provide a location to align SRTM")
+        else:
+            ref_crs = CRS.from_epsg(4326)
+            ref_transform = from_bounds(*bounds_wgs84, ref_width, ref_height)
 
     with rasterio.open(srtm_path) as src:
         src_data = src.read(1)
@@ -112,19 +139,47 @@ def align_srtm_to_image(image_path, srtm_path, out_path):
             print(f"Elevation range: {valid.min():.1f}m to {valid.max():.1f}m")
 
 
-def process_new_image(image_path):
+def process_new_image(
+    image_path,
+    output_dir=None,
+    center_lat=None,
+    center_lon=None,
+    ground_width_m=None,
+):
     """Full pipeline: any image in -> aligned SRTM reference out."""
+    output_dir = output_dir or os.getcwd()
+    os.makedirs(output_dir, exist_ok=True)
     basename = os.path.splitext(os.path.basename(image_path))[0]
-    raw_srtm_path = f"srtm_{basename}_raw.tif"
-    aligned_srtm_path = f"srtm_{basename}_aligned.tif"
+    raw_srtm_path = os.path.join(output_dir, f"srtm_{basename}_raw.tif")
+    aligned_srtm_path = os.path.join(output_dir, f"srtm_{basename}_aligned.tif")
 
     print(f"\n=== Processing: {image_path} ===\n")
 
-    lon_min, lat_min, lon_max, lat_max = get_image_bounds_wgs84(image_path)
+    location = (center_lat, center_lon, ground_width_m)
+    if any(value is not None for value in location):
+        if any(value is None for value in location):
+            raise ValueError("Latitude, longitude, and ground width must be supplied together")
+        if not -90 < center_lat < 90 or not -180 <= center_lon <= 180 or ground_width_m <= 0:
+            raise ValueError("Location must use valid latitude/longitude and a positive ground width")
+        with rasterio.open(image_path) as image:
+            ground_height_m = ground_width_m * image.height / image.width
+        lat_radius = ground_height_m / (2 * 111320.0)
+        lon_radius = ground_width_m / (
+            2 * 111320.0 * max(abs(np.cos(np.deg2rad(center_lat))), 1e-6)
+        )
+        lon_min, lon_max = center_lon - lon_radius, center_lon + lon_radius
+        lat_min, lat_max = center_lat - lat_radius, center_lat + lat_radius
+        if lat_min < -90 or lat_max > 90:
+            raise ValueError("Ground-width extent extends beyond valid latitude bounds")
+        bounds_wgs84 = (lon_min, lat_min, lon_max, lat_max)
+    else:
+        bounds_wgs84 = None
+        lon_min, lat_min, lon_max, lat_max = get_image_bounds_wgs84(image_path)
+
     print(f"Detected bounds (lon/lat): {lon_min:.4f}, {lat_min:.4f}, {lon_max:.4f}, {lat_max:.4f}\n")
 
     download_srtm(lon_min, lat_min, lon_max, lat_max, raw_srtm_path)
-    align_srtm_to_image(image_path, raw_srtm_path, aligned_srtm_path)
+    align_srtm_to_image(image_path, raw_srtm_path, aligned_srtm_path, bounds_wgs84)
 
     print(f"\nDone. Reference elevation ready at: {aligned_srtm_path}")
     return aligned_srtm_path

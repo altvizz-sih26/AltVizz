@@ -3,7 +3,7 @@ import os
 import shutil
 import uuid
 
-from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
 
 from app.database import get_db, SessionLocal
@@ -38,7 +38,12 @@ def _store_upload(file: UploadFile):
     return filename, filepath
 
 
-def process_job(job_id: str, filepath: str, srtm_path: str | None = None):
+def process_job(
+    job_id: str,
+    filepath: str,
+    srtm_path: str | None = None,
+    location: tuple[float, float, float] | None = None,
+):
     """
     Background task: run height estimation and store the result.
 
@@ -61,6 +66,9 @@ def process_job(job_id: str, filepath: str, srtm_path: str | None = None):
                 filepath,
                 srtm_path=srtm_path,
                 progress=lambda stage, pct: _update_job_progress(db, job_id, stage, pct),
+                center_lat=location[0] if location else None,
+                center_lon=location[1] if location else None,
+                ground_width_m=location[2] if location else None,
             )
             result = Result(job_id=job_id, **output)
             db.add(result)
@@ -82,6 +90,7 @@ def process_compare_job(
     before_path: str,
     after_path: str,
     srtm_path: str | None = None,
+    location: tuple[float, float, float] | None = None,
 ):
     """Background task for a before/after comparison job."""
     db = SessionLocal()
@@ -100,6 +109,9 @@ def process_compare_job(
                 after_path,
                 srtm_path=srtm_path,
                 progress=lambda stage, pct: _update_job_progress(db, job_id, stage, pct),
+                center_lat=location[0] if location else None,
+                center_lon=location[1] if location else None,
+                ground_width_m=location[2] if location else None,
             )
             result = Result(
                 job_id=job_id,
@@ -130,6 +142,9 @@ async def upload_image(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     srtm_file: UploadFile | None = File(None),
+    center_lat: float | None = Form(None),
+    center_lon: float | None = Form(None),
+    ground_width_m: float | None = Form(None),
     db: Session = Depends(get_db),
 ):
     """
@@ -143,6 +158,21 @@ async def upload_image(
     calibration falls back to "relative" mode - a fixed, arbitrary 0-50m
     scale that is NOT a real height estimate. See ml_stub.py / depth_pipeline.py.
     """
+    location_values = (center_lat, center_lon, ground_width_m)
+    location = None
+    if any(value is not None for value in location_values):
+        if any(value is None for value in location_values):
+            raise HTTPException(
+                status_code=400,
+                detail="Latitude, longitude, and ground width must be supplied together.",
+            )
+        if not -90 < center_lat < 90 or not -180 <= center_lon <= 180 or ground_width_m <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail="Provide valid latitude/longitude and a positive ground width in metres.",
+            )
+        location = (center_lat, center_lon, ground_width_m)
+
     if file.content_type not in ALLOWED_CONTENT_TYPES:
         raise HTTPException(
             status_code=400,
@@ -175,7 +205,7 @@ async def upload_image(
     db.refresh(job)
 
     # Run the (stubbed) ML pipeline in the background so the request returns instantly
-    background_tasks.add_task(process_job, job.id, filepath, srtm_path)
+    background_tasks.add_task(process_job, job.id, filepath, srtm_path, location)
 
     return job
 
@@ -186,9 +216,27 @@ async def upload_compare(
     before_file: UploadFile = File(...),
     after_file: UploadFile = File(...),
     srtm_file: UploadFile | None = File(None),
+    center_lat: float | None = Form(None),
+    center_lon: float | None = Form(None),
+    ground_width_m: float | None = Form(None),
     db: Session = Depends(get_db),
 ):
     """Upload a before/after pair and start an asynchronous comparison."""
+    location_values = (center_lat, center_lon, ground_width_m)
+    location = None
+    if any(value is not None for value in location_values):
+        if any(value is None for value in location_values):
+            raise HTTPException(
+                status_code=400,
+                detail="Latitude, longitude, and ground width must be supplied together.",
+            )
+        if not -90 < center_lat < 90 or not -180 <= center_lon <= 180 or ground_width_m <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail="Provide valid latitude/longitude and a positive ground width in metres.",
+            )
+        location = (center_lat, center_lon, ground_width_m)
+
     files = [before_file, after_file]
     if srtm_file is not None:
         files.append(srtm_file)
@@ -234,5 +282,6 @@ async def upload_compare(
         before_path,
         after_path,
         srtm_path,
+        location,
     )
     return job

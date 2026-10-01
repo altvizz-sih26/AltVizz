@@ -1,6 +1,6 @@
 import numpy as np
 import rasterio
-from scipy.ndimage import median_filter
+from scipy.ndimage import gaussian_filter, median_filter
 
 CLASS_NAMES = {
     0: "urban",
@@ -93,14 +93,17 @@ def global_calibration(depth, reference_elevation, void_mask):
 
 def terrain_aware_calibration(depth, reference_elevation, void_mask, terrain_mask, min_pixels=500, degree=2):
     """SRTM + terrain mask available — separate polynomial fit per terrain class.
-    degree=2 chosen based on GAMUS validation: terrain-wise polynomial matched
-    or beat plain linear and Huber robust regression in every terrain class
-    tested, with the clearest gains on water and low-vegetation classes."""
-    calibrated = np.zeros_like(depth)
+    Class-specific surfaces are blended with smoothed class masks to avoid
+    abrupt elevation steps at classifier boundaries."""
+    depth = np.asarray(depth, dtype=np.float32)
+    reference_elevation = np.asarray(reference_elevation, dtype=np.float32)
+    terrain_mask = np.asarray(terrain_mask)
     valid = ~void_mask
     coeffs_global = np.polyfit(depth[valid].flatten(), reference_elevation[valid].flatten(), degree)
 
     fit_report = {}
+    surfaces = []
+    weights = []
     for cls in np.unique(terrain_mask):
         class_pixels = (terrain_mask == cls) & valid
         n_pixels = int(class_pixels.sum())
@@ -109,9 +112,14 @@ def terrain_aware_calibration(depth, reference_elevation, void_mask, terrain_mas
         else:
             coeffs = np.polyfit(depth[class_pixels].flatten(), reference_elevation[class_pixels].flatten(), degree)
         fit_report[int(cls)] = (tuple(coeffs), n_pixels)
-        calibrated[terrain_mask == cls] = np.polyval(coeffs, depth[terrain_mask == cls])
+        surfaces.append(np.polyval(coeffs, depth).astype(np.float32))
+        weights.append(gaussian_filter((terrain_mask == cls).astype(np.float32), sigma=3.0))
 
-    return calibrated, fit_report
+    weight_stack = np.stack(weights)
+    weight_sum = weight_stack.sum(axis=0)
+    np.maximum(weight_sum, 1e-8, out=weight_sum)
+    calibrated = np.sum(np.stack(surfaces) * weight_stack, axis=0) / weight_sum
+    return calibrated.astype(np.float32), fit_report
     """SRTM + terrain mask available — separate fit per terrain class."""
     calibrated = np.zeros_like(depth)
     valid = ~void_mask
