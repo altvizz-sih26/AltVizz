@@ -10,7 +10,7 @@
 <img src="assets_im/03-pipeline.png" alt="Processing pipeline" width="45%">
 <img src="assets_im/04-results.png" alt="Results" width="45%">
 <br>
-<img src="assets_im/05-viewer.png" alt="3D viewer" width="45%">
+<img src="assets_im/05-viewer.png" alt="3D viewer" width="80%">
 
 **Team AltVizz** (Team ID 167420) · Smart India Hackathon 2026 · Problem Statement 26175 · Organization: ISRO, Department of Space
 
