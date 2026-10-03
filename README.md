@@ -4,17 +4,13 @@
 
 *Terrain-aware reconstruction and interactive 3D terrain analysis from a single optical image.*
 
-<p align="center">
-  ![Landing page](assets_im/01-landing.png)
-  ![Upload page](assets_im/02-upload.png)
-</p>
-<p align="center">
-  ![Processing pipeline](assets_im/03-pipeline.png)
-  ![Results](assets_im/04-results.png)
-</p>
-<p align="center">
-  ![3D viewer](assets_im/05-viewer.png)
-</p>
+<img src="assets_im/01-landing.png" alt="Landing page" width="45%">
+<img src="assets_im/02-upload.png" alt="Upload page" width="45%">
+<br>
+<img src="assets_im/03-pipeline.png" alt="Processing pipeline" width="45%">
+<img src="assets_im/04-results.png" alt="Results" width="45%">
+<br>
+<img src="assets_im/05-viewer.png" alt="3D viewer" width="45%">
 
 **Team AltVizz** (Team ID 167420) · Smart India Hackathon 2026 · Problem Statement 26175 · Organization: ISRO, Department of Space
 
