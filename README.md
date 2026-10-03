@@ -5,15 +5,15 @@
 *Terrain-aware reconstruction and interactive 3D terrain analysis from a single optical image.*
 
 <p align="center">
-  <img src="/Users/tanishka/Desktop/AltVizz/assets_im/01-landing.png" alt="DepthWizard landing page" width="30%">
-  <img src="/Users/tanishka/Desktop/AltVizz/assets_im/02-upload.png" alt="Upload satellite imagery" width="30%">
+  ![Landing page](assets_im/01-landing.png)
+  ![Upload page](assets_im/02-upload.png)
 </p>
 <p align="center">
-  <img src="/Users/tanishka/Desktop/AltVizz/assets_im/03-pipeline.png" alt="Terrain reconstruction pipeline in progress" width="30%">
-  <img src="/Users/tanishka/Desktop/AltVizz/assets_im/04-results.png" alt="Reconstruction complete: DSM and terrain mesh outputs" width="30%">
+  ![Processing pipeline](assets_im/03-pipeline.png)
+  ![Results](assets_im/04-results.png)
 </p>
 <p align="center">
-  <img src="/Users/tanishka/Desktop/AltVizz/assets_im/05-viewer.png" alt="Interactive 3D terrain viewer with elevation profile and analysis map" width="80%">
+  ![3D viewer](assets_im/05-viewer.png)
 </p>
 
 **Team AltVizz** (Team ID 167420) · Smart India Hackathon 2026 · Problem Statement 26175 · Organization: ISRO, Department of Space
