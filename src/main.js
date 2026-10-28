@@ -200,6 +200,7 @@ const inspectionPanelEl = $("terrain-inspection-panel");
 
 const inspectionRowEl = $("inspection-row");
 const inspectionColEl = $("inspection-col");
+const inspectionLonLatEl = $("inspection-lonlat");
 
 const inspectionElevationEl = $("inspection-elevation");
 const inspectionSlopeEl = $("inspection-slope");
@@ -2100,7 +2101,7 @@ function updateModelMetadataPanels(
   if (viewportGeorefEl) {
 
     viewportGeorefEl.textContent =
-      configMeta.coordinates || configMeta.spatialResolution
+      (configMeta.coordinates || configMeta.spatialResolution || terrainData?.geoCorners)
         ? "Georeferenced"
         : "Not provided by pipeline yet";
   }
@@ -2109,7 +2110,8 @@ function updateModelMetadataPanels(
   if (metadataResolutionEl) {
 
     metadataResolutionEl.textContent =
-      configMeta.spatialResolution ||
+    configMeta.spatialResolution || (terrainData?.pixelSizeM ? `${terrainData.pixelSizeM.toFixed(2)} m per pixel` : null) ||
+  
       "Not provided by pipeline yet";
   }
 
@@ -2117,7 +2119,8 @@ function updateModelMetadataPanels(
   if (metadataCoordinatesEl) {
 
     metadataCoordinatesEl.textContent =
-      configMeta.coordinates ||
+    configMeta.coordinates || (() => { const c = terrainData ? gridToLonLat((terrainData.rows - 1) / 2, (terrainData.cols - 1) / 2) : null; return c ? `Centre ${c.lat.toFixed(5)}, ${c.lon.toFixed(5)}` : null; })() ||
+      
       "Not provided by pipeline yet";
   }
 
@@ -2133,7 +2136,7 @@ function updateModelMetadataPanels(
             horiz ? `Horizontal: ${horiz}` : null,
             vert ? `Vertical: ${vert}` : null,
           ].filter(Boolean).join(" · ")
-        : "Not provided by pipeline yet";
+        : (terrainData?.geoCorners ? "Horizontal: WGS84 (lat/lon)" : "Not provided by pipeline yet");
   }
 
 
@@ -2363,13 +2366,14 @@ function scanGridRange(grid) {
 // not a substitute for a real slope field from the pipeline.
 // ============================================================================
 
-function computeSlopeGrid(elevation, rows, cols) {
+ function computeSlopeGrid(elevation, rows, cols, pixelSizeM) {
 
   if (!elevation || !rows || !cols) {
     return null;
   }
 
   const result = new Float32Array(rows * cols);
+  const step = pixelSizeM > 0 ? pixelSizeM : 1;
 
   for (let row = 0; row < rows; row++) {
 
@@ -2390,12 +2394,12 @@ function computeSlopeGrid(elevation, rows, cols) {
 
       const dzdx =
         (typeof left === "number" && typeof right === "number")
-          ? (right - left) / 2
+          ? (right - left) / 2 * step
           : 0;
 
       const dzdy =
         (typeof up === "number" && typeof down === "number")
-          ? (down - up) / 2
+          ? (down - up) / 2 * step
           : 0;
 
       const slopeRad = Math.atan(Math.sqrt(dzdx * dzdx + dzdy * dzdy));
@@ -2867,6 +2871,16 @@ function normalizeGrid(raw) {
 // LOAD GRID OBJECT
 // ============================================================================
 
+function gridToLonLat(row, col) {
+  const g = terrainData?.geoCorners;
+  if (!g) return null;
+  const u = col / (terrainData.cols - 1), v = row / (terrainData.rows - 1);
+  const lerp = (a, b, t) => a + (b - a) * t;
+  return {
+    lon: lerp(lerp(g[0], g[2], u), lerp(g[4], g[6], u), v),
+    lat: lerp(lerp(g[1], g[3], u), lerp(g[5], g[7], u), v),
+  };
+}
 function loadGridObject(raw) {
 
   try {
@@ -2875,6 +2889,10 @@ function loadGridObject(raw) {
       normalizeGrid(
         raw
       );
+    const gc = extractField(raw, ["geo_corners"]).data;
+    terrainData.geoCorners = gc && gc.length === 8 ? Array.from(gc) : null;
+    terrainData.pixelSizeM = getScalar(raw, ["pixel_size_m"]);
+
 
 
     // Belt-and-suspenders check: even a "valid-looking" 2D shape can
@@ -2927,7 +2945,8 @@ function loadGridObject(raw) {
       terrainData.slope = computeSlopeGrid(
         terrainData.elevation,
         terrainData.rows,
-        terrainData.cols
+        terrainData.cols,
+        getScalar(raw, ["pixel_size_m"])
       );
 
       terrainData.slopeIsEstimated = true;
@@ -3776,6 +3795,9 @@ function showInspection(
       ? String(data.col)
       : "---"
   );
+  const ll = data.row !== undefined && data.col !== undefined ? gridToLonLat(data.row, data.col) : null;
+  set(inspectionLonLatEl, ll ? `${ll.lat.toFixed(5)}, ${ll.lon.toFixed(5)}` : "---");
+
 
 
   set(
@@ -5146,8 +5168,54 @@ async function loadComparisonPair(afterRoot, beforeUrl) {
       // the live "after" attribute gets overwritten as the slider
       // moves, so we can't re-read it from the mesh once dragging
       // starts.
+            // Overlay that shows the BEFORE photo on the same (morphing) geometry.
+      const overlay = new THREE.Mesh(afterEntry.mesh.geometry, beforeEntry.mesh.material.clone());
+      overlay.material.transparent = true;
+      overlay.material.depthWrite = false;
+      overlay.material.polygonOffset = true;
+      overlay.material.polygonOffsetFactor = -1;
+      overlay.renderOrder = 1;
+      afterEntry.mesh.add(overlay);
+            // Change highlight: orange wherever the two photos differ strongly.
+      let changeOverlay = null;
+      try {
+        const imgA = beforeEntry.mesh.material.map?.image;
+        const imgB = afterEntry.mesh.material.map?.image;
+        if (imgA && imgB) {
+          const w = imgB.width, h = imgB.height;
+          const cA = document.createElement("canvas"); cA.width = w; cA.height = h;
+          const cB = document.createElement("canvas"); cB.width = w; cB.height = h;
+          const xA = cA.getContext("2d"), xB = cB.getContext("2d");
+          xA.drawImage(imgA, 0, 0, w, h);
+          xB.drawImage(imgB, 0, 0, w, h);
+          const dA = xA.getImageData(0, 0, w, h), dB = xB.getImageData(0, 0, w, h);
+          const out = xB.createImageData(w, h);
+          let hits = 0;
+          for (let i = 0; i < dA.data.length; i += 4) {
+            const d = (Math.abs(dA.data[i] - dB.data[i]) + Math.abs(dA.data[i + 1] - dB.data[i + 1]) + Math.abs(dA.data[i + 2] - dB.data[i + 2])) / 3;
+            out.data[i] = 255; out.data[i + 1] = 70; out.data[i + 2] = 0;
+            out.data[i + 3] = Math.max(0, Math.min(1, (d - 30) / 50)) * 255;
+            if (out.data[i + 3] > 12) hits++;
+          }
+          console.log("[SASA MINE] change highlight:", w, "x", h, "pixels highlighted:", hits);
+          const cOut = document.createElement("canvas"); cOut.width = w; cOut.height = h;
+          cOut.getContext("2d").putImageData(out, 0, 0);
+          const tex = new THREE.CanvasTexture(cOut);
+          tex.flipY = beforeEntry.mesh.material.map.flipY;
+          tex.colorSpace = THREE.SRGBColorSpace;
+          changeOverlay = new THREE.Mesh(
+            afterEntry.mesh.geometry,
+            new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, opacity: 0 })
+          );
+          changeOverlay.renderOrder = 2;
+          afterEntry.mesh.add(changeOverlay);
+        }
+      } catch (e) { console.warn("[SASA MINE] change highlight skipped:", e); }
+
       entries.push({
         mesh: afterEntry.mesh,
+        overlay,
+        changeOverlay,
         afterPositions: Float32Array.from(afterEntry.positions.array),
         beforePositions: Float32Array.from(beforeEntry.positions.array),
       });
@@ -5195,6 +5263,42 @@ async function loadComparisonPair(afterRoot, beforeUrl) {
 // Before/After snapshots (never lerping into an already-lerped
 // buffer), so scrubbing the slider back and forth stays exact instead
 // of drifting.
+// Keeps the Elevation Profile, peak/base numbers and Analysis Map in step
+// with the Before/After slider (blends the two height grids by slider position).
+let elevationBlendBuffer = null;
+let elevSyncTimer = null;
+let elevSyncLast = 0;
+
+function applyElevationForSlider(t) {
+  if (!gridLoaded || !terrainData?.before || !terrainData?.during) return;
+  const a = terrainData.before;
+  const b = terrainData.during;
+  if (a.length !== b.length) return;
+  if (!elevationBlendBuffer || elevationBlendBuffer.length !== a.length) {
+    elevationBlendBuffer = new Float32Array(a.length);
+  }
+  for (let i = 0; i < a.length; i++) {
+    elevationBlendBuffer[i] = a[i] * (1 - t) + b[i] * t;
+  }
+  terrainData.elevation = elevationBlendBuffer;
+  if (terrainData.slopeIsEstimated) {
+    terrainData.slope = computeSlopeGrid(terrainData.elevation, terrainData.rows, terrainData.cols, terrainData.pixelSizeM);
+    slopeRange = null;
+  }
+  updateElevationPanels();
+  drawAnalysisMap();
+  if (slopeHeatmapOn || elevationColorOn) applyShadingMode();
+
+}
+
+function scheduleElevationSync() {
+  const wait = Math.max(0, 150 - (performance.now() - elevSyncLast));
+  clearTimeout(elevSyncTimer);
+  elevSyncTimer = setTimeout(() => {
+    elevSyncLast = performance.now();
+    applyElevationForSlider(comparisonT);
+  }, wait);
+}
 function applyComparisonT(t, { recomputeFraming = true } = {}) {
 
   if (!comparisonReady || !comparisonEntries.length) {
@@ -5203,7 +5307,7 @@ function applyComparisonT(t, { recomputeFraming = true } = {}) {
 
   const clampedT = Math.min(Math.max(t, 0), 1);
 
-  comparisonEntries.forEach(({ mesh, beforePositions, afterPositions }) => {
+  comparisonEntries.forEach(({ mesh, overlay, changeOverlay,  beforePositions, afterPositions }) => {
 
     const attribute = mesh.geometry.attributes.position;
     const array = attribute.array;
@@ -5220,9 +5324,18 @@ function applyComparisonT(t, { recomputeFraming = true } = {}) {
     mesh.geometry.computeVertexNormals();
     mesh.geometry.computeBoundingBox();
     mesh.geometry.computeBoundingSphere();
+    if (overlay) {
+      overlay.material.opacity = 1 - clampedT;
+      overlay.visible = overlay.material.opacity > 0.001;
+    }
+    if (changeOverlay) {
+      changeOverlay.material.opacity = 0.65 * clampedT;
+      changeOverlay.visible = clampedT > 0.001;
+    }
   });
 
   comparisonT = clampedT;
+  scheduleElevationSync();
 
   if (comparisonValueEl) {
 
@@ -6319,11 +6432,13 @@ function updateMetricsRows() {
   }
 
   const m = a?.metrics;
+  
   const fmt = (x, d) => (typeof x === "number" && Number.isFinite(x) ? x.toFixed(d) : "---");
   const defs = [
-    ["metadata-row-rmse", "RMSE", "rmse", 2],
-    ["metadata-row-mae", "MAE", "mae", 2],
-    ["metadata-row-corr", "Correlation", "correlation", 3],
+    ["metadata-row-rmse", "Spread RMS (m)", "rmse", 2],
+    ["metadata-row-mae", "Spread MAE (m)", "mae", 2],
+    ["metadata-row-corr", "Self-consistency r", "correlation", 3],
+    
   ];
 
   let prev = null;
@@ -6339,8 +6454,8 @@ function updateMetricsRows() {
     el.textContent = comparisonReady && typeof before === "number"
       ? `${fmt(before, digits)} -> ${fmt(after, digits)}`
       : fmt(after ?? before, digits);
-    el.title = `Whole-image held-out evaluation over ${(m.after ?? m.before).pooled.n ?? "?"} pixels - not a per-point value.` +
-      (comparisonReady && typeof before === "number" ? " Shown as before -> after." : "");
+          el.title = "Disagreement between the model's prediction on this image and on its mirror image. A consistency check, not accuracy against true heights.";
+        
   }
 }
 

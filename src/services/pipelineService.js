@@ -251,6 +251,7 @@ export const getResults = async () => {
     calibrationMode: result.calibration_mode ?? null,
     errorMean: result.error_mean ?? null,
     correlation: result.correlation ?? null,
+    spread: fitReport?.spread || null,
     srtmStatus: result.srtm_status || fitReport?.srtm_status || changeSummary?.srtm_status ||
       (result.calibration_mode === 'relative' ? 'SRTM unavailable; output is relative and not metric.' : null),
     changeSummary,

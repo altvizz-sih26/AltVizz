@@ -517,7 +517,7 @@ def _elevation(height, srtm_path, mask, use_srtm, label):
         print(f"[{label}] in-sample vs SRTM (fit and scored on the same pixels - optimistic): "
               f"corr={meta.get('correlation')}, mean err={meta.get('error_mean')}")
         return elev
-    return relative_elevation(np.asarray(height, dtype=np.float32))
+    return np.asarray(height, dtype=np.float32)
 
 
 def apply_noise_floor(diff, k=NOISE_K):
@@ -534,7 +534,7 @@ def apply_noise_floor(diff, k=NOISE_K):
 
 
 def run_before_during(h_before, h_after, mask_before=None, mask_after=None,
-                      srtm_path=None, use_srtm=True):
+                      srtm_path=None, use_srtm=True, conf_before=None, conf_after=None):
     mask_before = _resolve_mask(h_before.shape, mask_before)
     mask_after = _resolve_mask(h_after.shape, mask_after)
     shapes = {"height_before": h_before.shape, "height_after": h_after.shape,
@@ -544,8 +544,8 @@ def run_before_during(h_before, h_after, mask_before=None, mask_after=None,
 
     elev_b = _elevation(h_before, srtm_path, mask_before, use_srtm, "before")
     elev_a = _elevation(h_after, srtm_path, mask_after, use_srtm, "after")
-    conf_b = compute_confidence(mask_before, class_names=CLASS_NAMES)
-    conf_a = compute_confidence(mask_after, class_names=CLASS_NAMES)
+    conf_b = compute_confidence(mask_before, class_names=CLASS_NAMES) if conf_before is None else np.asarray(conf_before, dtype=np.float32)
+    conf_a = compute_confidence(mask_after, class_names=CLASS_NAMES) if conf_after is None else np.asarray(conf_after, dtype=np.float32)
 
     diff = compute_difference_grid(elev_b, elev_a, mask_before, mask_after, conf_b, conf_a)
     sig, floor, sigma, shift = apply_noise_floor(diff)
@@ -569,12 +569,16 @@ def run_before_during(h_before, h_after, mask_before=None, mask_after=None,
             "diff_grid": diff, "mode": "srtm_calibrated" if use_srtm else "height_above_ground_m",
             "metrics_before": metrics_b, "metrics_after": metrics_a}
 
-
-def save_for_person4(result, sample_id, out_dir="person2_elevation/diff_output"):
+def save_for_person4(result, sample_id, out_dir="person2_elevation/diff_output", pixel_size_m=None, geo_corners=None):
     Path(out_dir).mkdir(parents=True, exist_ok=True)
     d = result["diff_grid"]
     output_path = Path(out_dir) / f"{sample_id}.npz"
-    np.savez(output_path,
+    extra = {}
+    if pixel_size_m:
+        extra["pixel_size_m"] = np.float32(sum(pixel_size_m) / 2)
+    if geo_corners:
+        extra["geo_corners"] = np.array(geo_corners, dtype=np.float64)
+    np.savez(output_path, **extra,
              elevation_before=result["elevation_before"],
              elevation_after=result["elevation_after"],
              confidence_before=result["confidence_before"],
@@ -587,15 +591,10 @@ def save_for_person4(result, sample_id, out_dir="person2_elevation/diff_output")
              significant_change=d["significant_change"],
              noise_floor=np.float32(d["noise_floor"]),
              mode=np.array(result["mode"]),
-             # metrics saved as JSON text, since they're nested per-class dicts,
-             # not a fixed-shape array. Load back with:
-             #   json.loads(str(np.load(path)["metrics_before"]))
-             # _to_native guarantees numpy scalars / NaN never break json.dumps.
              metrics_before=np.array(json.dumps(_to_native(result["metrics_before"]))),
              metrics_after=np.array(json.dumps(_to_native(result["metrics_after"]))))
     print(f"Saved {sample_id}.npz to {out_dir}")
     return str(output_path)
-
 
 if __name__ == "__main__":
     h_b = load_height(PRE_NAME, USE_SRTM)

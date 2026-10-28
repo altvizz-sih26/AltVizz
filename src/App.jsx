@@ -393,7 +393,8 @@ function Results() {
           <dt>Input format</dt><dd>{data?.fileType || 'image/tiff'}</dd>
           <dt>Output format</dt><dd>{outputFormats}</dd>
           <dt>Reconstruction</dt><dd className="success">{data?.status || 'Complete'}</dd>
-          <dt>Calibration</dt><dd>{data?.calibrationMode || 'relative (uncalibrated)'}</dd>
+          <dt>Calibration</dt><dd>{data?.calibrationMode === 'model_plus_srtm' ? 'Model height + SRTM ground (m above sea level)' : data?.calibrationMode === 'model_metric' ? 'Model height (m above ground)' : data?.calibrationMode || 'relative (uncalibrated)'}</dd> 
+          {data?.spread ? <><dt>Model consistency</dt><dd title="How closely the model agrees with itself on a mirrored copy of this image. A consistency check, not accuracy against true heights.">±{data.spread.mae.toFixed(1)} m typical · r {data.spread.correlation.toFixed(2)}</dd></> : null}
         </dl>
 
         {data?.glbUrl
@@ -402,7 +403,7 @@ function Results() {
       </article>
     </div>
     <button className="text-button back" onClick={fresh}>← Upload New Image</button>
-  </section>{modal && <div className="modal-backdrop" onMouseDown={() => setModal('')}><div className="modal" onMouseDown={e => e.stopPropagation()}><button className="close" onClick={() => setModal('')}>×</button>{modal === 'dsm' ? <><TerrainArt dsmUrl={data?.dsmUrl} minHeightM={data?.minHeightM} maxHeightM={data?.maxHeightM} calibrationMode={data?.calibrationMode} /><h2>Digital Surface Model</h2><p>{data?.demoMode ? 'Sample result — live processing was unavailable.' : isUncalibrated ? 'Uncalibrated estimate — no reference elevation data was used.' : `Calibrated against real elevation data (${data?.calibrationMode} mode).`}</p></> : <><div className="model-preview big">GLB</div><h2>GLB Terrain Output</h2><p>{data?.glbUrl ? 'This GLB is ready for download or exploration in the interactive viewer.' : 'No 3D mesh was generated for this job.'}</p><div className="actions"><button className="button primary" onClick={downloadResult}>Download GLB</button></div></>}</div></div>}</Layout>;
+  </section>{modal && <div className="modal-backdrop" onMouseDown={() => setModal('')}><div className="modal" onMouseDown={e => e.stopPropagation()}><button className="close" onClick={() => setModal('')}>×</button>{modal === 'dsm' ? <><TerrainArt dsmUrl={data?.dsmUrl} minHeightM={data?.minHeightM} maxHeightM={data?.maxHeightM} calibrationMode={data?.calibrationMode} /><h2>Digital Surface Model</h2><p>{data?.demoMode ? 'Sample result — live processing was unavailable.' : data?.calibrationMode === 'model_metric' ? 'Height above ground estimated by the fine-tuned model, in metres.' : isUncalibrated ? 'Uncalibrated estimate — no reference elevation data was used.' : `Calibrated against real elevation data (${data?.calibrationMode} mode).`}</p></> : <><div className="model-preview big">GLB</div><h2>GLB Terrain Output</h2><p>{data?.glbUrl ? 'This GLB is ready for download or exploration in the interactive viewer.' : 'No 3D mesh was generated for this job.'}</p><div className="actions"><button className="button primary" onClick={downloadResult}>Download GLB</button></div></>}</div></div>}</Layout>;
 }
 
 const viewerHref = d => {

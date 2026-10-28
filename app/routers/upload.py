@@ -37,6 +37,83 @@ def _store_upload(file: UploadFile):
         shutil.copyfileobj(file.file, destination)
     return filename, filepath
 
+def _normalize_image_file(filepath: str) -> None:
+    """16-bit / float / single-band GeoTIFFs -> 8-bit 3-band, georeferencing kept."""
+    if os.path.splitext(filepath)[1].lower() not in (".tif", ".tiff"):
+        return
+    import numpy as np
+    import rasterio
+    with rasterio.open(filepath) as src:
+        if src.count == 3 and src.dtypes[0] == "uint8":
+            return
+        data = src.read()
+        profile = src.profile
+        names = [(d or "").lower() for d in src.descriptions]
+    if all(n in names for n in ("red", "green", "blue")):
+        data = data[[names.index("red"), names.index("green"), names.index("blue")]]
+    if data.shape[0] == 1:
+        data = np.repeat(data, 3, axis=0)
+    elif data.shape[0] > 3:
+        data = data[:3]
+    if data.dtype != np.uint8:
+        out = np.zeros(data.shape, dtype=np.uint8)
+        for i in range(3):
+            band = data[i].astype(np.float32)
+            lo, hi = np.percentile(band, (2, 98))
+            out[i] = np.clip((band - lo) / max(hi - lo, 1e-6) * 255, 0, 255).astype(np.uint8)
+        data = out
+    profile.update(count=3, dtype="uint8", nodata=None, photometric="RGB")
+    with rasterio.open(filepath, "w", **profile) as dst:
+        dst.write(data)
+    """16-bit / float / single-band GeoTIFFs -> 8-bit 3-band, georeferencing kept."""
+    if os.path.splitext(filepath)[1].lower() not in (".tif", ".tiff"):
+        return
+    import numpy as np
+    import rasterio
+    with rasterio.open(filepath) as src:
+        if src.count == 3 and src.dtypes[0] == "uint8":
+            return
+        data = src.read()
+        profile = src.profile
+        names = [(d or "").lower() for d in src.descriptions]
+    if all(n in names for n in ("red", "green", "blue")):
+        data = data[[names.index("red"), names.index("green"), names.index("blue")]]
+        if data.shape[0] == 1: data = np.repeat(data, 3, axis=0)
+    elif data.shape[0] > 3: data = data[:3]
+    if data.dtype != np.uint8:
+        out = np.zeros(data.shape, dtype=np.uint8)
+        for i in range(3):
+            band = data[i].astype(np.float32)
+            lo, hi = np.percentile(band, (2, 98))
+            out[i] = np.clip((band - lo) / max(hi - lo, 1e-6) * 255, 0, 255).astype(np.uint8)
+        data = out
+    profile.update(count=3, dtype="uint8", nodata=None, photometric="RGB")
+    with rasterio.open(filepath, "w", **profile) as dst:
+        dst.write(data)
+    """16-bit / float / single-band GeoTIFFs -> 8-bit 3-band, georeferencing kept."""
+    if os.path.splitext(filepath)[1].lower() not in (".tif", ".tiff"):
+        return
+    import numpy as np
+    import rasterio
+    with rasterio.open(filepath) as src:
+        if src.count == 3 and src.dtypes[0] == "uint8":
+            return
+        data = src.read()
+        profile = src.profile
+    if data.shape[0] == 1:
+        data = np.repeat(data, 3, axis=0)
+    elif data.shape[0] > 3:
+        data = data[:3]
+    if data.dtype != np.uint8:
+        out = np.zeros(data.shape, dtype=np.uint8)
+        for i in range(3):
+            band = data[i].astype(np.float32)
+            lo, hi = np.percentile(band, (2, 98))
+            out[i] = np.clip((band - lo) / max(hi - lo, 1e-6) * 255, 0, 255).astype(np.uint8)
+        data = out
+    profile.update(count=3, dtype="uint8", nodata=None, photometric="RGB")
+    with rasterio.open(filepath, "w", **profile) as dst:
+        dst.write(data)
 
 def process_job(
     job_id: str,
@@ -185,6 +262,7 @@ async def upload_image(
 
     with open(filepath, "wb") as f:
         shutil.copyfileobj(file.file, f)
+        _normalize_image_file(filepath)
 
     srtm_path = None
     if srtm_file is not None:
@@ -249,6 +327,8 @@ async def upload_compare(
 
     before_name, before_path = _store_upload(before_file)
     after_name, after_path = _store_upload(after_file)
+    _normalize_image_file(before_path)
+    _normalize_image_file(after_path)
     srtm_path = _store_upload(srtm_file)[1] if srtm_file is not None else None
 
     before_upload = Upload(
