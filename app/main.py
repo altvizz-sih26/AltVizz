@@ -6,6 +6,9 @@ from fastapi.staticfiles import StaticFiles
 
 from app.database import Base, engine, migrate_schema
 from app.routers import upload, jobs
+import logging
+logging.basicConfig(level=logging.WARNING, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logging.getLogger("app").setLevel(logging.INFO)
 
 # Create tables on startup (fine for dev; use Alembic migrations later for prod)
 Base.metadata.create_all(bind=engine)

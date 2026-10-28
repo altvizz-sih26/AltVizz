@@ -54,9 +54,9 @@ for subfolder in ("", "person2_elevation", "terrain_classifier", "person3_3d_rec
     if path not in sys.path:
         sys.path.insert(0, path)
 
-from depth_anything_v2.dpt import DepthAnythingV2          # noqa: E402  (Person 1)
+from gamus_finetune.model import build_gamus_model        # noqa: E402  (Person 1)
 from terrain_classifier import classify_terrain             # noqa: E402
-from elevation_pipeline import CLASS_NAMES, generate_elevation  # noqa: E402  (Person 2)
+from elevation_pipeline import CLASS_NAMES, generate_elevation, load_elevation_any, detect_edge_artifacts  # noqa: E402  (Person 2)
 from confidence import compute_confidence                     # noqa: E402
 from process_new_image import process_new_image             # noqa: E402  (Person 5)
 from create_terrain import generate_glb                      # noqa: E402  (Person 3)
@@ -71,10 +71,15 @@ MODEL_CONFIGS = {
     "vitg": {"encoder": "vitg", "features": 384, "out_channels": [1536, 1536, 1536, 1536]},
 }
 ENCODER = os.getenv("DEPTH_MODEL_ENCODER", "vits")
+
 CHECKPOINT_PATH = os.path.abspath(os.getenv(
     "DEPTH_MODEL_CHECKPOINT",
     os.path.join(SIH_ROOT, "checkpoints", f"depth_anything_v2_{ENCODER}.pth"),
 ))
+
+FINETUNED_PATH = os.path.join(
+    SIH_ROOT, "gamus_finetune", "runs", "gamus_vits_run1", "best.pt"
+)
 DEVICE = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
 
 RESULTS_DIR = os.path.join(SIH_ROOT, "app", "results")
@@ -105,9 +110,11 @@ def _get_model() -> DepthAnythingV2:
                     f"Expected depth_anything_v2_{ENCODER}.pth inside the "
                     f"`checkpoints/` folder at the repo root."
                 )
-            model = DepthAnythingV2(**MODEL_CONFIGS[ENCODER])
-            model.load_state_dict(torch.load(CHECKPOINT_PATH, map_location="cpu"))
-            model = model.to(DEVICE).eval()
+            model = build_gamus_model(ENCODER, CHECKPOINT_PATH, device=DEVICE)
+            ckpt = torch.load(FINETUNED_PATH, map_location=DEVICE)
+            model.load_state_dict(ckpt["model_state"])
+            model = model.eval()
+            print("Loaded model:", type(model).__name__, "epoch", ckpt["epoch"])
             _model = model
     return _model
 
@@ -117,6 +124,7 @@ def _auto_fetch_srtm(
     center_lat: float | None = None,
     center_lon: float | None = None,
     ground_width_m: float | None = None,
+    exaggeration: float | None = None,
 ) -> tuple[str | None, str]:
     """
     Tries to automatically get a matching SRTM reference for this upload
@@ -136,6 +144,12 @@ def _auto_fetch_srtm(
         return path, "SRTM reference downloaded and aligned"
     except Exception as e:
         reason = f"SRTM unavailable: {e}"
+        _key = os.getenv("OPENTOPO_API_KEY", "").strip()
+        if _key:
+            reason = reason.replace(_key, "[hidden]")
+        if "API_Key=" in reason:
+            head, _, tail = reason.partition("API_Key=")
+            reason = head + "API_Key=[hidden]" + tail[len(tail.split("&")[0].split(" ")[0].split("'")[0]):]
         _logger.warning("%s (input %s)", reason, image_path)
         return None, reason
 
@@ -174,7 +188,19 @@ def _pixel_size_m(
         height_m = abs(geod.inv(xs[0], ys[0], xs[2], ys[2])[2])
         return float(width_m), float(height_m)
 
-
+def _geo_corners(image_path: str):
+    """Lon/lat of the four corner pixel centres (top-left, top-right, bottom-left, bottom-right)."""
+    try:
+        from rasterio.warp import transform as _warp_transform
+        with rasterio.open(image_path) as ds:
+            if ds.crs is None or ds.transform.is_identity:
+                return None
+            h, w = ds.height, ds.width
+            pts = [ds.xy(0, 0), ds.xy(0, w - 1), ds.xy(h - 1, 0), ds.xy(h - 1, w - 1)]
+            lons, lats = _warp_transform(ds.crs, "EPSG:4326", [p[0] for p in pts], [p[1] for p in pts])
+            return [float(v) for lon, lat in zip(lons, lats) for v in (lon, lat)]
+    except Exception:
+        return None
 def _prepare_glb_texture(image_path: str, base_name: str) -> tuple[str, str | None]:
     """Convert TIFF textures through GDAL so LZW inputs don't need imagecodecs."""
     if not image_path.lower().endswith((".tif", ".tiff")):
@@ -201,6 +227,7 @@ def _try_generate_glb(
     image_path: str,
     base_name: str,
     pixel_size_m: tuple[float, float] | None = None,
+    exaggeration: float = 1.0,
 ) -> str:
     """
     Builds the textured 3D mesh (Person 3's create_terrain.py, now a
@@ -218,6 +245,7 @@ def _try_generate_glb(
             texture_image_path,
             glb_full_path,
             pixel_size_m=pixel_size_m,
+            vertical_exaggeration=exaggeration,
         )
         return f"/static/results/{glb_filename}"
     except Exception as e:
@@ -337,6 +365,10 @@ def _save_analysis_npz(
     confidence: np.ndarray | None = None,
     mode: str | None = None,
     srtm_status: str | None = None,
+    pixel_size_m: tuple | None = None,
+    spread_metrics: dict | None = None,
+    geo_corners: list | None = None,
+
 ) -> str:
     """
     NEW: Saves the elevation grid as <base_name>_analysis.npz next to the GLB,
@@ -353,6 +385,7 @@ def _save_analysis_npz(
     """
     try:
         elev = np.asarray(elevation, dtype=np.float32)
+        original_width = elev.shape[1]
 
         # Downscale very large grids so the browser download stays small.
         longest = max(elev.shape[:2])
@@ -363,7 +396,11 @@ def _save_analysis_npz(
             elev = cv2.resize(elev, (new_w, new_h), interpolation=cv2.INTER_AREA)
 
         arrays = {"elevation": elev}
+        if pixel_size_m:
+            arrays["pixel_size_m"] = np.float32(sum(pixel_size_m) / 2 * original_width / elev.shape[1])
         for name, values in (("terrain", terrain_mask), ("confidence", confidence)):
+            if geo_corners:
+                arrays["geo_corners"] = np.array(geo_corners, dtype=np.float64)
             if values is None:
                 continue
             values = np.asarray(values)
@@ -378,6 +415,9 @@ def _save_analysis_npz(
             arrays["mode"] = np.array(mode)
         if srtm_status is not None:
             arrays["srtm_status"] = np.array(srtm_status)
+            if spread_metrics is not None:
+                arrays["metrics_after"] = np.array(json.dumps({"pooled": spread_metrics}))
+
 
         npz_filename = f"{base_name}_analysis.npz"
         np.savez_compressed(os.path.join(RESULTS_DIR, npz_filename), **arrays)
@@ -432,6 +472,7 @@ def reconstruct(
     center_lat: float | None = None,
     center_lon: float | None = None,
     ground_width_m: float | None = None,
+    exaggeration: float | None = None,
 ) -> dict:
     """
     Reconstructs elevation and 3D artifacts for one uploaded image:
@@ -474,7 +515,23 @@ def reconstruct(
     started = time.perf_counter()
     progress("Depth Estimation", 15)
     model = _get_model()
-    depth = _normalize_depth(model.infer_image(raw_image))
+    tensor, (h, w) = model.backbone_and_head.image2tensor(raw_image, 518)
+    with torch.no_grad():
+        height_m = torch.nn.functional.interpolate(model(tensor.to(DEVICE)), (h, w), mode="bilinear", align_corners=True)[0, 0].cpu().numpy()
+        depth = _normalize_depth(height_m)
+        flipped = np.ascontiguousarray(raw_image[:, ::-1])
+    tensor_f, (hf, wf) = model.backbone_and_head.image2tensor(flipped, 518)
+    with torch.no_grad():
+        height_flip = torch.nn.functional.interpolate(model(tensor_f.to(DEVICE)), (hf, wf), mode="bilinear", align_corners=True)[0, 0].cpu().numpy()[:, ::-1]
+    disagreement = np.abs(height_m - height_flip)
+    spread = {
+        "rmse": float(np.sqrt(np.mean((height_m - height_flip) ** 2))),
+        "mae": float(disagreement.mean()),
+        "correlation": float(np.corrcoef(height_m.ravel(), height_flip.ravel())[0, 1]),
+    }
+    uncertainty = cv2.GaussianBlur(disagreement.astype(np.float32), (0, 0), 3)
+    
+    
     _logger.info("Depth Estimation completed in %.3f seconds", time.perf_counter() - started)
 
     started = time.perf_counter()
@@ -487,7 +544,19 @@ def reconstruct(
 
     started = time.perf_counter()
     progress("Elevation Calibration", 55)
-    elevation, metadata = generate_elevation(depth, srtm_path=srtm_path, terrain_mask=terrain_mask)
+    elevation = height_m
+    metadata = {"mode": "model_metric", "error_mean": None, "error_max": None,
+            "correlation": None, "artifact_pixels": 0, "fit_report": None}
+    if srtm_path is not None:
+        ground, void = load_elevation_any(srtm_path)
+        if ground.shape != height_m.shape:
+            ground = cv2.resize(ground.astype(np.float32), (height_m.shape[1], height_m.shape[0]), interpolation=cv2.INTER_LINEAR)
+            void = cv2.resize(void.astype(np.uint8), (height_m.shape[1], height_m.shape[0]), interpolation=cv2.INTER_NEAREST).astype(bool)
+        bad = void | detect_edge_artifacts(ground)
+        if (~bad).any():
+            ground = np.where(bad, np.median(ground[~bad]), ground)
+            elevation = (ground + height_m).astype(np.float32)
+            metadata["mode"] = "model_plus_srtm"
     _logger.info("Elevation Calibration completed in %.3f seconds", time.perf_counter() - started)
 
     base_name = os.path.splitext(os.path.basename(image_path))[0]
@@ -502,25 +571,38 @@ def reconstruct(
 
     started = time.perf_counter()
     progress("Building 3D Mesh", 90)
+    px = _pixel_size_m(image_path, ground_width_m)
+    if exaggeration is None:
+        exaggeration = 1.0
+        relief = float(np.nanpercentile(elevation, 98) - np.nanpercentile(elevation, 2))
+        if px and relief > 0:
+            exaggeration = float(np.clip(0.12 * px[0] * elevation.shape[1] / relief, 1.0, 8.0))
     glb_url = _try_generate_glb(
         elevation,
         image_path,
         base_name,
-        _pixel_size_m(image_path, ground_width_m),
+        px,
+        exaggeration,
     )
     _logger.info("Building 3D Mesh completed in %.3f seconds", time.perf_counter() - started)
 
     return {
         "elevation": elevation,
         "depth": depth,
+        "height_m": height_m,
         "terrain_mask": terrain_mask,
         "meta": metadata,
         "base_name": base_name,
         "srtm_path": srtm_path,
+        "pixel_size_m": _pixel_size_m(image_path, ground_width_m),
+        "spread": spread,
+        "uncertainty": uncertainty,
         "srtm_status": srtm_status,
         "heightmap_url": heightmap_url,
         "dsm_geotiff_url": dsm_geotiff_url,
         "glb_url": glb_url,
+        "exaggeration": exaggeration,
+        "geo_corners": _geo_corners(image_path),
     }
 
 
@@ -552,9 +634,13 @@ def run_pipeline(
         elevation,
         result["base_name"],
         terrain_mask=result["terrain_mask"],
-        confidence=compute_confidence(result["terrain_mask"], class_names=CLASS_NAMES),
+        confidence=(1.0 / (1.0 + result["uncertainty"] / 2.0)).astype(np.float32),
         mode=metadata["mode"],
         srtm_status=result["srtm_status"],
+        pixel_size_m=result["pixel_size_m"],
+        spread_metrics=result["spread"],
+        geo_corners=result["geo_corners"],
+
     )
 
     fit_report = metadata["fit_report"]
@@ -565,6 +651,7 @@ def run_pipeline(
             "calibration": fit_report,
             "srtm_status": result["srtm_status"],
         }
+    fit_report["spread"] = result["spread"]
 
     return {
         "height_map_path": result["heightmap_url"],
@@ -609,22 +696,24 @@ def run_compare_pipeline(
     )
     progress("Aligning After Image", 42)
     aligned_after_path = align_after_to_before(before_path, after_path)
-    after = reconstruct(aligned_after_path, before["srtm_path"], after_progress)
+    after = reconstruct(aligned_after_path, before["srtm_path"], after_progress, exaggeration=before["exaggeration"])
 
     use_srtm = before["srtm_path"] is not None
     progress("Comparing Elevation", 90)
     comparison = run_before_during(
-        before["depth"],
-        after["depth"],
+        before["elevation"],
+        after["elevation"],
         before["terrain_mask"],
         after["terrain_mask"],
         srtm_path=before["srtm_path"],
-        use_srtm=use_srtm,
+        use_srtm=False,
+        conf_before=(1.0 / (1.0 + before["uncertainty"] / 2.0)).astype(np.float32),
+        conf_after=(1.0 / (1.0 + after["uncertainty"] / 2.0)).astype(np.float32),
     )
 
     comparison_name = f"{before['base_name']}_compare"
     progress("Saving Comparison", 95)
-    save_for_person4(comparison, comparison_name, out_dir=RESULTS_DIR)
+    save_for_person4(comparison, comparison_name, out_dir=RESULTS_DIR,pixel_size_m=before["pixel_size_m"], geo_corners=before["geo_corners"])
     change_summary = summarize_difference_grid(comparison["diff_grid"])
     change_summary["srtm_status"] = before["srtm_status"]
     progress("Comparison Complete", 100)
@@ -634,7 +723,7 @@ def run_compare_pipeline(
         "change_summary": change_summary,
         "mode": comparison["mode"],
         "srtm_status": before["srtm_status"],
-        "calibration_mode": "srtm_calibrated" if use_srtm else "relative",
+        "calibration_mode": "model_metric",
         "metrics_before": comparison["metrics_before"],
         "metrics_after": comparison["metrics_after"],
         "before_height_map_path": before["heightmap_url"],
